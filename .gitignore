@@ -1,2 +1,30 @@
+# Python: кеши и генераты
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+
+# Виртуальные окружения
+.venv/
+venv/
+env/
+
+# Тесты/ноутбуки
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# IDE/редакторы
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ОС
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Локальные артефакты
+*.log
+tmp/
+.cache/

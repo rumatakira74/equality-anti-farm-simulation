@@ -1,6 +1,6 @@
-# Результаты симуляции equality-simulation (воспроизведение)
+# Результаты симуляции equality-anti-farm-simulation (воспроизведение)
 
-- Модель: https://github.com/rumatakira74/equality-simulation (`farm_model.py`, Python).
+- Модель: https://github.com/rumatakira74/equality-anti-farm-simulation (`farm_model.py`, Python).
 - Прогон: 8 прогонов Монте-Карло на сценарий × 60 месяцев, усреднение по прогонам.
 - Патч `farm_model_pure.py`: numpy в песочнице недоступен и pip запрещён, поэтому
   выборка Пуассона заменена точной реализацией на стандартной библиотеке

@@ -1,6 +1,6 @@
-# equality-simulation results (reproduction)
+# equality-anti-farm-simulation results (reproduction)
 
-- Model: https://github.com/rumatakira74/equality-simulation (`farm_model.py`, Python).
+- Model: https://github.com/rumatakira74/equality-anti-farm-simulation (`farm_model.py`, Python).
 - Run: 8 Monte-Carlo runs per scenario × 60 months, averaged over runs.
 - Patch `farm_model_pure.py`: numpy was unavailable in the sandbox and pip was blocked, so Poisson sampling was replaced with an exact standard-library implementation (splitting λ into parts of 30 + Knuth's algorithm, a separate `random.Random(seed*7919+1)` stream); `nanmean` — by NaN filtering. The result is statistically equivalent to the author's but not bit-identical (a different RNG stream).
 - Conclusions are integrated into KNOWLEDGE.md v9.2, section 7.7.

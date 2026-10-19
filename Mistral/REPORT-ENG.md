@@ -1,7 +1,7 @@
 # REPORT.md — Stage 1.2: network economic parameters
 
 An extension of the Python farm-economics model (`Mistral/` branch).
-Requirements source: development-plan, item 1.2; KNOWLEDGE.md v9.2 (7.6, 8.3, 10.1–10.3, 17); the stage-0 specification (trust-networks-platform: spec/03, QUESTIONS No. 4, 11, 18, 20, 31). The stage-1.1 results (K = 3, slots 3/5/10, R = 10%, seed ≥ 300) were fixed and unchanged; every comparison is against the same base.
+Requirements source: development-plan, item 1.2; KNOWLEDGE.md v9.2 (7.6, 8.3, 10.1–10.3, 17); the stage-0 specification (equality-trust-networks: spec/03, QUESTIONS No. 4, 11, 18, 20, 31). The stage-1.1 results (K = 3, slots 3/5/10, R = 10%, seed ≥ 300) were fixed and unchanged; every comparison is against the same base.
 
 ## 1. Summary
 

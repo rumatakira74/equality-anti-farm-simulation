@@ -1,7 +1,7 @@
 # Farm-Attack Resistance Simulation (Equality Project — Trust Networks Platform)
 
 An agent-based model: network growth through personal vouching, and a wallet farm's attempt to entrench itself in the network.
-**DOI:** [10.5281/zenodo.23452922](https://doi.org/10.5281/zenodo.23452922)
+**DOI:** [10.5281/zenodo.23474357](https://doi.org/10.5281/zenodo.23474357)
 
 Author: Kirill Lapchinsky (Лапчинский Кирилл), October 13, 2026 (base model, stage 1.1); October 18, 2026 — stage 1.2 extension (demurrage, fees, transferability window, delayed transfers, moratorium).
 

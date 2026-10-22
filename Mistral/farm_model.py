@@ -706,6 +706,11 @@ def block3_scenarios(base: Params):
         adaptive_fee=True, recruit_shock_month=24, recruit_shock_mult=5.0, recruit_shock_len=3)
     g["3 шок притока x5 (мес 24-26), фикс 1%"] = p7(
         transfer_fee_rate=0.01, recruit_shock_month=24, recruit_shock_mult=5.0, recruit_shock_len=3)
+    # зрелая сеть: население выходит на потолок, относительный рост
+    # предложения падает ниже цели — нисходящая ветвь адаптивности
+    g["3 зрелая сеть (потолок 2000), адаптивная"] = p7(adaptive_fee=True, honest_cap=2000)
+    g["3 зрелая сеть (потолок 2000), фикс 1%"] = p7(transfer_fee_rate=0.01, honest_cap=2000)
+    g["3 сжатие сильное (приток -10%/мес), адаптивная"] = p7(adaptive_fee=True, recruit_decay=0.90)
 
     # 4) стратегии фермы против адаптивности
     for mode, nm in (("monthly", "слив ежемесячно"),

@@ -47,6 +47,7 @@ R, посевной круг) зафиксированы и не меняютс�
 Запуск:  python3 farm_model.py                 # сценарии 1.1 (без изменений)
          python3 farm_model.py --regression    # проверка воспроизведения базы 1.1
          python3 farm_model.py --stage12       # свеепы этапа 1.2
+         python3 farm_model.py --block3       # блок 3: адаптивная комиссия (№44)
          python3 farm_model.py --stage12 --group демередж   # одна группа
          python3 farm_model.py --runs 20       # больше прогонов Монте-Карло
 """
@@ -116,6 +117,28 @@ class Params:
     delay_threshold: float = float("inf")  # P отложенного перевода (единиц)
     delay_lag_months: int = 0        # лаг исполнения выше P (мес.; D=48ч -> 0)
     honest_turnover: float = 0.0    # доля переводимого остатка честного в месяц (0 = не моделировать)
+    # --- блок 3: адаптивная комиссия (№44; механика как в ядре, core/ledger/fee.go) ---
+    # Эпоха модели = месяц. На границе эпохи: рост total_supply за последние
+    # fee_adjust_epochs эпох выше цели -> ставка +fee_step, ниже -> -fee_step;
+    # зажим в [fee_rate_min; fee_rate_max]; fee = max(transfer_fee_min, rate*amount).
+    # При adaptive_fee=False ставка фиксирована = transfer_fee_rate (этап 1.2).
+    adaptive_fee: bool = False       # режим пересчёта ставки (False = фиксированная)
+    fee_adjust_epochs: int = 6       # окно K эпох (решение №44: K = 6)
+    fee_target_growth: float = 0.06  # целевой рост предложения за окно (6%)
+    fee_step: float = 0.0005         # шаг ставки, 0,05 п.п.
+    fee_rate_min: float = 0.005      # нижняя граница ставки (0,5%)
+    fee_rate_max: float = 0.02      # верхняя граница ставки (2%)
+    # --- блок 3: стратегии фермы против адаптивности ---
+    # monthly  — сливать всё переводимое каждый месяц (как в этапе 1.2);
+    # batch    — накапливать и сливать синхронно раз в farm_batch_months;
+    # low_rate — сливать только при ставке на нижней границе (иначе копить).
+    farm_sell_mode: str = "monthly"
+    farm_batch_months: int = 6      # период синхронного слива (режим batch)
+    # --- блок 3: динамика притока честных (сценарии роста/сжатия/шока) ---
+    recruit_decay: float = 1.0      # месячный множитель recruit_rate (1.0 = равномерно)
+    recruit_shock_month: int = -1   # месяц начала шокового притока (-1 = нет)
+    recruit_shock_mult: float = 1.0  # множитель recruit_rate во время шока
+    recruit_shock_len: int = 0      # длительность шока (мес.)
 
 
 class W:
@@ -161,6 +184,18 @@ def _poisson_fallback(rnd, lam):
     return k - 1
 
 
+
+def fee_rate_step(growth, rate, P):
+    """Шаг адаптивной ставки по росту предложения за окно K
+    (механика core/ledger/fee.go): рост выше цели -> +шаг, иначе -шаг
+    (не ниже нижней границы), зажим в [fee_rate_min; fee_rate_max]."""
+    if growth > P.fee_target_growth:
+        rate += P.fee_step
+    else:
+        rate = max(P.fee_rate_min, rate - P.fee_step)
+    return min(P.fee_rate_max, max(P.fee_rate_min, rate))
+
+
 def simulate(P: Params, run_seed: int):
     if np is not None:
         rng = np.random.default_rng(run_seed)
@@ -184,8 +219,59 @@ def simulate(P: Params, run_seed: int):
     farm_burned = 0.0             # сгорело у фермы: демередж + комиссии движения
     sales_queue = []              # [(месяц исполнения, сумма)]
     rows = []
+    # --- блок 3: адаптивная комиссия и учёт предложения ---
+    # total_supply = суммарный выпуск - сжигания (демередж + комиссии);
+    # проданные фермой единицы остаются в предложении (держатели вне модели) —
+    # как в протоколе: перевод не меняет предложение, чекпоинт видит все кошельки.
+    supply_minted = 0.0
+    supply_burned = 0.0
+    # ставка: адаптивная стартует с нижней границы (как в ядре: FeeRate = RateMin),
+    # фиксированная — из transfer_fee_rate
+    fee_rate = P.fee_rate_min if P.adaptive_fee else P.transfer_fee_rate
+    supply_snapshots = []         # [(эпоха=месяц, total_supply)] — окно K+1 снимков
+    growth_window = float("nan")  # последний измеренный рост за окно K
+
+    def adjust_fee_rate(m):
+        """Пересчёт ставки на границе эпохи (механика core/ledger/fee.go):
+        рост предложения за окно K выше цели -> +шаг, ниже -> -шаг (не ниже
+        нижней границы), зажим в [min; max]."""
+        nonlocal fee_rate, growth_window
+        supply_snapshots.append((m, supply_minted - supply_burned))
+        K = P.fee_adjust_epochs
+        if len(supply_snapshots) > K + 1:
+            supply_snapshots.pop(0)
+        if len(supply_snapshots) < K + 1:
+            return
+        base_s = supply_snapshots[0][1]
+        cur_s = supply_snapshots[-1][1]
+        if base_s <= 0.0 or cur_s < base_s:
+            return  # рост не определён / предложение монотонно (защита ядра)
+        growth_window = (cur_s - base_s) / base_s
+        fee_rate = fee_rate_step(growth_window, fee_rate, P)
+
+    def farm_may_sell(m):
+        """Стратегия фермы против адаптивности (блок 3)."""
+        if P.farm_sell_mode == "batch":
+            return (m - P.farm_start) % P.farm_batch_months == 0
+        if P.farm_sell_mode == "low_rate":
+            return fee_rate <= P.fee_rate_min + 1e-12
+        return True
 
     for m in range(P.months):
+        # граница эпохи (месяца): пересчёт адаптивной ставки по снимку
+        # предложения на конец прошлого месяца; при adaptive_fee=False —
+        # численно ничего не меняет (ставка фиксирована)
+        if P.adaptive_fee:
+            adjust_fee_rate(m)
+        # эффективный приток честных (сценарии роста/сжатия/шока; по умолчанию
+        # тождественен recruit_rate — потоки RNG не меняются)
+        recruit_eff = P.recruit_rate
+        if P.recruit_decay != 1.0:
+            recruit_eff *= P.recruit_decay ** m
+        if (P.recruit_shock_month >= 0 and
+                P.recruit_shock_month <= m < P.recruit_shock_month + P.recruit_shock_len):
+            recruit_eff *= P.recruit_shock_mult
+
         def capacity(w):
             if w.seed and m < 12:
                 return P.slots_seed
@@ -236,7 +322,7 @@ def simulate(P: Params, run_seed: int):
 
         # приход честных людей
         h_total = sum(1 for w in wallets if w.kind == "h")
-        n_new = int(poisson(P.recruit_rate * len(h_el))) if h_el else 0
+        n_new = int(poisson(recruit_eff * len(h_el))) if h_el else 0
         n_new = max(0, min(n_new, P.honest_cap - h_total))
         for _ in range(n_new):
             wallets.append(W("h", m))
@@ -295,9 +381,11 @@ def simulate(P: Params, run_seed: int):
                 burn = (w.bal - P.demurrage_floor) * P.demurrage_rate
                 w.bal -= burn
                 cost += burn
+                supply_burned += burn
                 if w.kind == "f":
                     farm_burned += burn
             amount = P.base_mint
+            supply_minted += amount  # полный выпуск в предложение (утечка R — перевод, не сжигание)
             if w.kind == "h":
                 n_h += 1
                 w.bal += amount
@@ -317,8 +405,9 @@ def simulate(P: Params, run_seed: int):
                 w.fresh.append((net, m + P.fresh_window))
                 f_cnt += 1
                 f_bal_sum += w.bal
-                # продажа переводимого (мораторий считается от register)
-                if m - w.reg >= P.moratorium_months:
+                # продажа переводимого (мораторий считается от register;
+                # стратегия фермы — блок 3: monthly / batch / low_rate)
+                if m - w.reg >= P.moratorium_months and farm_may_sell(m):
                     amt = 0.0
                     keep = []
                     for a, rel in w.fresh:
@@ -344,8 +433,9 @@ def simulate(P: Params, run_seed: int):
                 if spendable <= 0.0:
                     continue
                 s = spendable * P.honest_turnover
-                fee = max(P.transfer_fee_min, P.transfer_fee_rate * s) if s > 0.0 else 0.0
+                fee = max(P.transfer_fee_min, fee_rate * s) if s > 0.0 else 0.0
                 w.bal -= s + fee
+                supply_burned += fee
                 h_cost[i] = h_cost.get(i, 0.0) + fee
                 j = h_act[int(er.random() * len(h_act))]
                 wallets[j].bal += s
@@ -355,7 +445,8 @@ def simulate(P: Params, run_seed: int):
         still = []
         for exec_m, amt in sales_queue:
             if exec_m <= m:
-                fee = max(P.transfer_fee_min, P.transfer_fee_rate * amt)
+                fee = max(P.transfer_fee_min, fee_rate * amt)
+                supply_burned += fee
                 farm_burned += fee
                 farm_sold += amt - fee
             else:
@@ -384,6 +475,9 @@ def simulate(P: Params, run_seed: int):
             "honest_cost_pct": 100.0 * hcost_med / P.base_mint,
             "honest_supply_per_wallet": (h_bal_sum / len(h_act)) if h_act else 0.0,
             "farm_stock_mean": (f_bal_sum / f_cnt) if f_cnt else 0.0,
+            "fee_rate_pct": 100.0 * fee_rate,
+            "total_supply": supply_minted - supply_burned,
+            "supply_growth_window_pct": 100.0 * growth_window if growth_window == growth_window else float("nan"),
         })
     return rows
 
@@ -572,6 +666,139 @@ def stage12(runs: int, out: str, group_filter=None):
     print(f"\nCSV сохранены в: {out}")
 
 
+
+def block3_scenarios(base: Params):
+    """Сценарии блока 3 (№44): адаптивная комиссия против фиксированной,
+    оборот честных, рост/сжатие/шок сети, стратегии фермы, демередж
+    профилей 5/7, мораторий. База механизмов — профиль 7 (currency):
+    демередж 1%/мес., floor 3000 (3 месячных выпуска), окно 3 мес.,
+    fee_min 0,01; мораторий по сценариям (дни -> доли месяца)."""
+    mint3 = 3.0 * base.base_mint
+    T = 0.5                                   # оборот честных по умолчанию
+    fee_min = 0.01                             # №44: fee_min = 0,01
+    mor14 = 14.0 / 30.0                        # 14 дней в долях месяца
+    # общий «профиль 7» с фиксированной или адаптивной комиссией
+    def p7(**kw):
+        d = dict(demurrage_rate=0.01, demurrage_floor=mint3, fresh_window=3,
+                 moratorium_months=mor14, transfer_fee_min=fee_min,
+                 honest_turnover=T)
+        d.update(kw)
+        return replace(base, **d)
+
+    g = {}
+
+    # 1) адаптивная против фиксированной (одинаковые прочие механизмы)
+    g["1 адаптивная (старт 0.5%)"] = p7(adaptive_fee=True)
+    g["1 фикс 0.5%"] = p7(transfer_fee_rate=0.005)
+    g["1 фикс 1%"] = p7(transfer_fee_rate=0.01)
+    g["1 фикс 2%"] = p7(transfer_fee_rate=0.02)
+
+    # 2) оборот честных 10-100% предложения в месяц (адаптивная ставка)
+    for t_ in (0.1, 0.25, 0.5, 0.75, 1.0):
+        g[f"2 оборот {t_:g}"] = p7(adaptive_fee=True, honest_turnover=t_)
+
+    # 3) рост / сжатие / шок сети (адаптивная и фикс 1% для сравнения)
+    g["3 равномерный рост, адаптивная"] = p7(adaptive_fee=True)
+    g["3 равномерный рост, фикс 1%"] = p7(transfer_fee_rate=0.01)
+    g["3 сжатие (приток -3%/мес), адаптивная"] = p7(adaptive_fee=True, recruit_decay=0.97)
+    g["3 сжатие (приток -3%/мес), фикс 1%"] = p7(transfer_fee_rate=0.01, recruit_decay=0.97)
+    g["3 шок притока x5 (мес 24-26), адаптивная"] = p7(
+        adaptive_fee=True, recruit_shock_month=24, recruit_shock_mult=5.0, recruit_shock_len=3)
+    g["3 шок притока x5 (мес 24-26), фикс 1%"] = p7(
+        transfer_fee_rate=0.01, recruit_shock_month=24, recruit_shock_mult=5.0, recruit_shock_len=3)
+    # зрелая сеть: население выходит на потолок, относительный рост
+    # предложения падает ниже цели — нисходящая ветвь адаптивности
+    g["3 зрелая сеть (потолок 2000), адаптивная"] = p7(adaptive_fee=True, honest_cap=2000)
+    g["3 зрелая сеть (потолок 2000), фикс 1%"] = p7(transfer_fee_rate=0.01, honest_cap=2000)
+    g["3 сжатие сильное (приток -10%/мес), адаптивная"] = p7(adaptive_fee=True, recruit_decay=0.90)
+
+    # 4) стратегии фермы против адаптивности
+    for mode, nm in (("monthly", "слив ежемесячно"),
+                     ("batch", "накопление 6 мес + синхронный слив"),
+                     ("low_rate", "слив только при ставке 0.5%")):
+        g[f"4 ферма: {nm}, адаптивная"] = p7(adaptive_fee=True, farm_sell_mode=mode)
+    g["4 ферма: накопление 6 мес + слив, фикс 1%"] = p7(
+        transfer_fee_rate=0.01, farm_sell_mode="batch")
+    g["4 ферма: слив ежемесячно, фикс 1%"] = p7(
+        transfer_fee_rate=0.01, farm_sell_mode="monthly")
+
+    # 5) демередж профилей 5/7: равновесие «хранение vs движение»
+    # 5а) профиль 7 (выпуск 1000/мес): изолированные и совместные механизмы
+    g["5 дем1% изолир., комиссия 0"] = p7(demurrage_rate=0.01, transfer_fee_rate=0.0)
+    g["5 комиссия адапт. изолир., дем 0"] = p7(adaptive_fee=True, demurrage_rate=0.0)
+    g["5 дем1% + комиссия адапт."] = p7(adaptive_fee=True)
+    for r_ in (0.005, 0.02):
+        g[f"5 дем{r_*100:g}% + комиссия адапт."] = p7(adaptive_fee=True, demurrage_rate=r_)
+    # 5б) профиль 5 (выпуск 10/мес, «банк времени»): floor 3000 против
+    # floor 30 (3 месячных выпуска) — при 3000 демередж не действует никогда
+    def p5(floor):
+        return replace(base, base_mint=10.0, demurrage_rate=0.01,
+                       demurrage_floor=floor, fresh_window=3,
+                       moratorium_months=mor14, transfer_fee_min=fee_min,
+                       fee_rate_max=0.01, adaptive_fee=True, honest_turnover=T)
+    g["5 проф5: дем1%, floor 3000 (как в шаблоне)"] = p5(3000.0)
+    g["5 проф5: дем1%, floor 30 (3 месячных выпуска)"] = p5(30.0)
+    g["5 проф5: дем1%, floor 30, оборот 0.1"] = replace(p5(30.0), honest_turnover=0.1)
+
+    # 6) мораторий 7-30 дней x окно накопления (схема «зарегистрировал -> слил»)
+    for days in (7, 14, 30):
+        mor = days / 30.0
+        for w_ in (0, 3, 6):
+            g[f"6 морат {days} д, окно {w_}"] = p7(
+                adaptive_fee=True, moratorium_months=mor, fresh_window=w_)
+
+    return g
+
+
+def block3(runs: int, out: str, group_filter=None):
+    base = Params()
+    groups = block3_scenarios(base)
+    if group_filter:
+        groups = {k: v for k, v in groups.items() if group_filter.lower() in k.lower()}
+    os.makedirs(out, exist_ok=True)
+    print(f"Блок 3 (№44): {runs} прогонов на сценарий; порог пересечения ${CROSS_PRICE}")
+    hdr = (f"{'сценарий':46s} | {'доля ф. m60':>10s} | {'$ m38':>7s} | {'$ m60':>7s} | "
+           f"{'ставка m60':>9s} | {'ставка min-max':>13s} | {'честные %':>9s} | {'сток':>6s}")
+    print(hdr)
+    summary = []
+    for name, P in groups.items():
+        runs_rows = [simulate(P, s) for s in range(1, runs + 1)]
+        mean_rows = aggregate(runs_rows)
+        crosses = [crossing_month(r) for r in runs_rows]
+        cross_med = statistics.median([c if c is not None else P.months + 1 for c in crosses])
+        m60 = mean_rows[59]
+        m38 = mean_rows[37]
+        rates = [r["fee_rate_pct"] for r in mean_rows]
+        print(f"{name:46s} | {100*m60['farm_share']:9.1f}% | {m38['breakeven_price']:7.4f} | "
+              f"{m60['breakeven_price']:7.4f} | {m60['fee_rate_pct']:8.2f}% | "
+              f"{min(rates):4.2f}-{max(rates):5.2f}% | {m60['honest_cost_pct']:8.2f}% | "
+              f"{m60['farm_stock_mean']:6.0f}")
+        summary.append({
+            "scenario": name, "farm_share_m60": 100 * m60["farm_share"],
+            "breakeven_m38": m38["breakeven_price"], "breakeven_m60": m60["breakeven_price"],
+            "crossing_001_median": cross_med,
+            "fee_rate_m60_pct": m60["fee_rate_pct"],
+            "fee_rate_min_pct": min(rates), "fee_rate_max_pct": max(rates),
+            "honest_cost_pct_m60": m60["honest_cost_pct"],
+            "farm_drain_pct_m60": (100.0 * m60["farm_burned_units"] / m60["farm_units_net"]
+                                   if m60["farm_units_net"] else 0.0),
+            "honest_supply_per_wallet_m60": m60["honest_supply_per_wallet"],
+            "farm_stock_mean_m60": m60["farm_stock_mean"],
+            "total_supply_m60": m60["total_supply"],
+        })
+        fname = os.path.join(out, "b3_" + name.replace(" ", "_").replace("/", "-").replace(":", "").replace("%", "proc").replace(",", "") + ".csv")
+        with open(fname, "w", newline="", encoding="utf-8") as f:
+            wr = csv.DictWriter(f, fieldnames=list(mean_rows[0].keys()))
+            wr.writeheader()
+            wr.writerows(mean_rows)
+    sname = os.path.join(out, "block3_summary.csv")
+    with open(sname, "w", newline="", encoding="utf-8") as f:
+        wr = csv.DictWriter(f, fieldnames=list(summary[0].keys()))
+        wr.writeheader()
+        wr.writerows(summary)
+    print(f"\nCSV сохранены в: {out}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--runs", type=int, default=8, help="число прогонов Монте-Карло на сценарий")
@@ -579,6 +806,7 @@ def main():
     ap.add_argument("--no-plot", action="store_true")
     ap.add_argument("--regression", action="store_true", help="проверка воспроизведения базы 1.1")
     ap.add_argument("--stage12", action="store_true", help="свеепы экономических параметров этапа 1.2")
+    ap.add_argument("--block3", action="store_true", help="блок 3: адаптивная комиссия, демередж, мораторий (№44)")
     ap.add_argument("--group", default=None, help="фильтр сценариев stage12 по подстроке имени")
     args = ap.parse_args()
 
@@ -588,6 +816,10 @@ def main():
 
     if args.stage12:
         stage12(args.runs, args.out, args.group)
+        return
+
+    if args.block3:
+        block3(args.runs, args.out, args.group)
         return
 
     os.makedirs(args.out, exist_ok=True)

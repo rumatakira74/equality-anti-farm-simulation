@@ -9,7 +9,8 @@ import unittest
 from dataclasses import replace
 
 sys.path.insert(0, "Mistral")
-from farm_model import Params, simulate, fee_rate_step, block3_scenarios  # noqa: E402
+from farm_model import (Params, simulate, fee_rate_step,  # noqa: E402
+                        block3_scenarios, block3_params_scenarios)
 
 
 class TestFeeRateStep(unittest.TestCase):
@@ -176,6 +177,45 @@ class TestBlock3Scenarios(unittest.TestCase):
         self.assertAlmostEqual(adaptive.transfer_fee_min, 0.01)
         # фиксированные сценарии не адаптивны
         self.assertFalse(g["1 фикс 1%"].adaptive_fee)
+
+
+class TestBlock3ParamsScenarios(unittest.TestCase):
+    """Контрольные сценарии цели 15%/окно (мини-этап 11.4, решение
+    владельца 22.10.2026 по итогам блока 3)."""
+
+    def test_groups_present(self):
+        g = block3_params_scenarios(Params())
+        self.assertEqual(len(g), 9)
+        for name in ("оборот 0.25", "оборот 0.5", "оборот 1",
+                     "равномерный рост", "сжатие (приток -3%/мес)",
+                     "шок притока x5 (мес 24-26)", "зрелая сеть (потолок 2000)",
+                     "зрелая сеть 120 мес (потолок 2000)",
+                     "сжатие 120 мес (приток -3%/мес)"):
+            self.assertIn(name, g)
+        # цель 15%/окно в каждом сценарии; механика №44 не меняется
+        for name, P in g.items():
+            self.assertTrue(P.adaptive_fee, name)
+            self.assertAlmostEqual(P.fee_target_growth, 0.15)
+            self.assertEqual(P.fee_adjust_epochs, 6)
+            self.assertAlmostEqual(P.fee_step, 0.0005)
+            self.assertAlmostEqual(P.fee_rate_min, 0.005)
+            self.assertAlmostEqual(P.fee_rate_max, 0.02)
+            self.assertAlmostEqual(P.transfer_fee_min, 0.01)
+            # база «профиль 7»: демередж 1%/мес, floor 3000, окно 3, мораторий 14 д
+            self.assertAlmostEqual(P.demurrage_rate, 0.01)
+            self.assertAlmostEqual(P.demurrage_floor, 3000.0)
+            self.assertEqual(P.fresh_window, 3)
+            self.assertAlmostEqual(P.moratorium_months, 14.0 / 30.0)
+        # сценарии динамики сети
+        self.assertAlmostEqual(g["сжатие (приток -3%/мес)"].recruit_decay, 0.97)
+        shock = g["шок притока x5 (мес 24-26)"]
+        self.assertEqual((shock.recruit_shock_month, shock.recruit_shock_mult,
+                          shock.recruit_shock_len), (24, 5.0, 3))
+        self.assertEqual(g["зрелая сеть (потолок 2000)"].honest_cap, 2000)
+        # обороты честных
+        self.assertAlmostEqual(g["оборот 0.25"].honest_turnover, 0.25)
+        self.assertAlmostEqual(g["оборот 0.5"].honest_turnover, 0.5)
+        self.assertAlmostEqual(g["оборот 1"].honest_turnover, 1.0)
 
 
 if __name__ == "__main__":

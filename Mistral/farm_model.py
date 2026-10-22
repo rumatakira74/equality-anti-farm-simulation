@@ -48,6 +48,7 @@ R, посевной круг) зафиксированы и не меняютс�
          python3 farm_model.py --regression    # проверка воспроизведения базы 1.1
          python3 farm_model.py --stage12       # свеепы этапа 1.2
          python3 farm_model.py --block3       # блок 3: адаптивная комиссия (№44)
+         python3 farm_model.py --block3-params # контроль цели 15%/окно (11.4)
          python3 farm_model.py --stage12 --group демередж   # одна группа
          python3 farm_model.py --runs 20       # больше прогонов Монте-Карло
 """
@@ -750,13 +751,44 @@ def block3_scenarios(base: Params):
     return g
 
 
-def block3(runs: int, out: str, group_filter=None):
-    base = Params()
-    groups = block3_scenarios(base)
-    if group_filter:
-        groups = {k: v for k, v in groups.items() if group_filter.lower() in k.lower()}
+def block3_params_scenarios(base: Params):
+    """Контрольные сценарии цели 15%/окно (решение владельца 22.10.2026
+    по итогам блока 3 — мини-этап 11.4): та же база «профиль 7», что в
+    block3_scenarios, но fee_target_growth = 0,15. Оборот честных
+    0.25/0.5/1, равномерный рост, сжатие (−3%/мес), шок притока, зрелая
+    сеть (потолок 2000) — подтверждение типичной ставки и нисходящей
+    ветви (ставка ниже старта при зрелой/сжимающейся сети)."""
+    fee_min = 0.01                             # №44: fee_min = 0,01
+    mor14 = 14.0 / 30.0                        # 14 дней в долях месяца
+
+    def p7(**kw):
+        d = dict(demurrage_rate=0.01, demurrage_floor=3.0 * base.base_mint,
+                 fresh_window=3, moratorium_months=mor14,
+                 transfer_fee_min=fee_min, honest_turnover=0.5,
+                 adaptive_fee=True, fee_target_growth=0.15)
+        d.update(kw)
+        return replace(base, **d)
+
+    g = {}
+    for t_ in (0.25, 0.5, 1.0):
+        g[f"оборот {t_:g}"] = p7(honest_turnover=t_)
+    g["равномерный рост"] = p7()
+    g["сжатие (приток -3%/мес)"] = p7(recruit_decay=0.97)
+    g["шок притока x5 (мес 24-26)"] = p7(
+        recruit_shock_month=24, recruit_shock_mult=5.0, recruit_shock_len=3)
+    # зрелая сеть: население выходит на потолок, относительный рост
+    # предложения падает ниже цели 15% — нисходящая ветвь адаптивности
+    g["зрелая сеть (потолок 2000)"] = p7(honest_cap=2000)
+    # контроль нисходящей ветви на горизонте 120 мес (как в блоке 3):
+    # рост за окно пересекает цель 15% ~m65 — ставка начинает снижаться
+    g["зрелая сеть 120 мес (потолок 2000)"] = replace(p7(honest_cap=2000), months=120)
+    g["сжатие 120 мес (приток -3%/мес)"] = replace(p7(recruit_decay=0.97), months=120)
+    return g
+
+
+def _block3_run(groups, runs: int, out: str, prefix: str, summary_name: str, title: str):
     os.makedirs(out, exist_ok=True)
-    print(f"Блок 3 (№44): {runs} прогонов на сценарий; порог пересечения ${CROSS_PRICE}")
+    print(f"{title}: {runs} прогонов на сценарий; порог пересечения ${CROSS_PRICE}")
     hdr = (f"{'сценарий':46s} | {'доля ф. m60':>10s} | {'$ m38':>7s} | {'$ m60':>7s} | "
            f"{'ставка m60':>9s} | {'ставка min-max':>13s} | {'честные %':>9s} | {'сток':>6s}")
     print(hdr)
@@ -786,17 +818,36 @@ def block3(runs: int, out: str, group_filter=None):
             "farm_stock_mean_m60": m60["farm_stock_mean"],
             "total_supply_m60": m60["total_supply"],
         })
-        fname = os.path.join(out, "b3_" + name.replace(" ", "_").replace("/", "-").replace(":", "").replace("%", "proc").replace(",", "") + ".csv")
+        fname = os.path.join(out, prefix + name.replace(" ", "_").replace("/", "-").replace(":", "").replace("%", "proc").replace(",", "") + ".csv")
         with open(fname, "w", newline="", encoding="utf-8") as f:
             wr = csv.DictWriter(f, fieldnames=list(mean_rows[0].keys()))
             wr.writeheader()
             wr.writerows(mean_rows)
-    sname = os.path.join(out, "block3_summary.csv")
+    sname = os.path.join(out, summary_name)
     with open(sname, "w", newline="", encoding="utf-8") as f:
         wr = csv.DictWriter(f, fieldnames=list(summary[0].keys()))
         wr.writeheader()
         wr.writerows(summary)
     print(f"\nCSV сохранены в: {out}")
+
+
+def block3(runs: int, out: str, group_filter=None):
+    """Блок 3 (№44): адаптивная комиссия против фиксированной, оборот,
+    рост/сжатие/шок, стратегии фермы, демередж профилей 5/7, мораторий."""
+    groups = block3_scenarios(Params())
+    if group_filter:
+        groups = {k: v for k, v in groups.items() if group_filter.lower() in k.lower()}
+    _block3_run(groups, runs, out, "b3_", "block3_summary.csv", "Блок 3 (№44)")
+
+
+def block3_params(runs: int, out: str, group_filter=None):
+    """Контрольный прогон цели 15%/окно (мини-этап 11.4, решение владельца
+    22.10.2026 по итогам блока 3)."""
+    groups = block3_params_scenarios(Params())
+    if group_filter:
+        groups = {k: v for k, v in groups.items() if group_filter.lower() in k.lower()}
+    _block3_run(groups, runs, out, "b3p_", "block3_params_summary.csv",
+                 "Блок 3-params (цель 15%/окно)")
 
 
 def main():
@@ -807,6 +858,7 @@ def main():
     ap.add_argument("--regression", action="store_true", help="проверка воспроизведения базы 1.1")
     ap.add_argument("--stage12", action="store_true", help="свеепы экономических параметров этапа 1.2")
     ap.add_argument("--block3", action="store_true", help="блок 3: адаптивная комиссия, демередж, мораторий (№44)")
+    ap.add_argument("--block3-params", action="store_true", help="контрольный прогон цели 15%/окно (11.4)")
     ap.add_argument("--group", default=None, help="фильтр сценариев stage12 по подстроке имени")
     args = ap.parse_args()
 
@@ -820,6 +872,10 @@ def main():
 
     if args.block3:
         block3(args.runs, args.out, args.group)
+        return
+
+    if args.block3_params:
+        block3_params(args.runs, args.out, args.group)
         return
 
     os.makedirs(args.out, exist_ok=True)

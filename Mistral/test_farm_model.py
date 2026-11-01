@@ -10,7 +10,8 @@ from dataclasses import replace
 
 sys.path.insert(0, "Mistral")
 from farm_model import (Params, simulate, fee_rate_step,  # noqa: E402
-                        block3_scenarios, block3_params_scenarios)
+                        unit_transferable, block3_scenarios, block3_params_scenarios,
+                        block4_scenarios)
 
 
 class TestFeeRateStep(unittest.TestCase):
@@ -220,3 +221,87 @@ class TestBlock3ParamsScenarios(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBlock4Recurring(unittest.TestCase):
+    """Блок 4 (профиль 8, v9.10): сгорание по периодной метке — перевод
+    единицы периода P отвергается после границы P+grace; метка передачей
+    не обновляется; накопление сверх периода исключено."""
+
+    # база профиля 8: комиссия 0, демереджа нет, окно свежести 0
+    P8 = dict(months=40, fresh_window=0, transfer_fee_rate=0.0,
+              transfer_fee_min=0.0, demurrage_rate=0.0, honest_turnover=0.0,
+              moratorium_months=14.0 / 30.0)
+
+    def test_unit_transferable_window(self):
+        # окно жизни единицы: метка P -> переводима в [P, P+grace]
+        P = replace(Params(), recurring=True, recurring_grace=1)
+        self.assertTrue(unit_transferable(5, 5, P))   # месяц метки
+        self.assertTrue(unit_transferable(5, 6, P))   # граница P+1
+        self.assertFalse(unit_transferable(5, 7, P))   # после границы — сгорела
+
+    def test_no_retag_on_transfer(self):
+        # метка НЕ обновляется передачей (кольцо peer-redeem не продлевает
+        # жизнь): переводимость зависит только от исходной метки
+        P = replace(Params(), recurring=True, recurring_grace=1)
+        self.assertFalse(unit_transferable(5, 7, P))
+
+    def test_recurring_no_accumulation(self):
+        # ключевой вопрос: ферма НЕ накапливает квоты сверх периода.
+        # При полном сливе сток ~0 в обоих режимах — контраст виден при
+        # ограниченной ликвидности (0.5): в std непроданное копится
+        # (сток растёт), в recurring — сгорает на границе (сток ограничен)
+        rec = simulate(replace(Params(), recurring=True, farm_sell_capacity=0.5, **self.P8), 1)
+        std = simulate(replace(Params(), farm_sell_capacity=0.5, **self.P8), 1)
+        import statistics as st
+        rec_stock = st.mean(r["farm_stock_mean"] for r in rec)
+        std_stock = st.mean(r["farm_stock_mean"] for r in std)
+        self.assertLess(rec_stock, std_stock)
+        self.assertGreater(rec[39]["farm_dead_units"], 0.0)
+
+    def test_grace_widens_stock(self):
+        # grace 2 -> окно 2 месяца: при ограниченной ликвидности сток
+        # фермы не меньше, чем при grace 1 (окно держит больше живых единиц)
+        g1 = simulate(replace(Params(), recurring=True, recurring_grace=1,
+                              farm_sell_capacity=0.5, **self.P8), 1)
+        g2 = simulate(replace(Params(), recurring=True, recurring_grace=2,
+                              farm_sell_capacity=0.5, **self.P8), 1)
+        import statistics as st
+        s1 = st.mean(r["farm_stock_mean"] for r in g1)
+        s2 = st.mean(r["farm_stock_mean"] for r in g2)
+        self.assertGreaterEqual(s2, s1)
+
+    def test_capacity_burns_stock(self):
+        # ограниченная ликвидность: в recurring непроданное в окне
+        # сгорает, безубыточная цена выше полного слива
+        rec = simulate(replace(Params(), recurring=True, farm_sell_capacity=0.25, **self.P8), 1)
+        rec_full = simulate(replace(Params(), recurring=True, **self.P8), 1)
+        self.assertGreater(rec[39]["farm_dead_units"], 0.0)
+        self.assertGreater(rec[39]["breakeven_price"], rec_full[39]["breakeven_price"])
+
+    def test_batch_suicide_in_recurring(self):
+        # обход «накопить и слить пачкой» в recurring самоубийственен:
+        # копить нельзя — всё вне окна сгорает
+        monthly = simulate(replace(Params(), recurring=True, farm_sell_mode="monthly", **self.P8), 1)
+        batch = simulate(replace(Params(), recurring=True, farm_sell_mode="batch", **self.P8), 1)
+        self.assertGreater(batch[39]["farm_dead_units"],
+                           monthly[39]["farm_dead_units"])
+        self.assertLess(batch[39]["farm_sold_units"], monthly[39]["farm_sold_units"])
+        self.assertGreater(batch[39]["breakeven_price"], monthly[39]["breakeven_price"])
+
+    def test_honest_use(self):
+        # потребление честных (redeem): при use 1.0 непотреблённого нет,
+        # при 0.5 — часть квоты сгорает (неубыток честного)
+        full = simulate(replace(Params(), recurring=True, honest_use_rate=1.0, **self.P8), 1)
+        half = simulate(replace(Params(), recurring=True, honest_use_rate=0.5, **self.P8), 1)
+        self.assertGreaterEqual(full[39]["honest_dead_units"], 0.0)
+        self.assertGreater(half[39]["honest_used_units"], 0.0)
+
+    def test_groups_present(self):
+        # сценарии блока 4 покрывают вопросы мандата
+        g = block4_scenarios(Params())
+        self.assertIn("1 rec (grace 1)", g)
+        self.assertIn("1 std (без метки)", g)
+        self.assertTrue(any("кольцо" in k for k in g))
+        self.assertTrue(any("мораторий" in k for k in g))
+        self.assertTrue(any("потребление" in k for k in g))

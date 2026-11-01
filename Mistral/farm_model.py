@@ -49,6 +49,7 @@ R, посевной круг) зафиксированы и не меняютс�
          python3 farm_model.py --stage12       # свеепы этапа 1.2
          python3 farm_model.py --block3       # блок 3: адаптивная комиссия (№44)
          python3 farm_model.py --block3-params # контроль цели 15%/окно (11.4)
+         python3 farm_model.py --block4       # блок 4: recurring-квоты профиля 8
          python3 farm_model.py --stage12 --group демередж   # одна группа
          python3 farm_model.py --runs 20       # больше прогонов Монте-Карло
 """
@@ -140,6 +141,22 @@ class Params:
     recruit_shock_month: int = -1   # месяц начала шокового притока (-1 = нет)
     recruit_shock_mult: float = 1.0  # множитель recruit_rate во время шока
     recruit_shock_len: int = 0      # длительность шока (мес.)
+    # --- блок 4: recurring-единицы профиля 8 (v9.10, раздел 4) ---
+    # Квота за период с меткой: единица периода P переводима, пока текущий
+    # период <= P + grace (ядро: перевод отвергается после границы P+1 ->
+    # grace = 1; заявка квоты периода P происходит в периоде P+1, M4 ->
+    # окно жизни единицы = 1 месяц). Метка НЕ обновляется передачей
+    # (получателю доли приходят с меткой отправителя) — кольца peer-redeem
+    # жизнь единицы не продлевают. Не сброс баланса: сгоревшие единицы
+    # остаются в балансе кошелька; в модели мёртвый сток учитывается
+    # отдельно (farm_dead_units) и из переводимого баланса убирается
+    # (демереджа в профиле 8 нет — на экономику не влияет).
+    recurring: bool = False         # периодная метка на квотах (False = std)
+    recurring_grace: int = 1       # периодов после метки, пока единица переводима
+    farm_sell_capacity: float = 1.0  # доля переводимого стока, продаваемая за месяц
+                                    # (ограниченная ликвидность сбыта)
+    honest_use_rate: float = 0.0   # доля квоты, потребляемая честным в месяц
+                                    # (redeem поставщику; 0 = не моделировать)
 
 
 class W:
@@ -184,6 +201,15 @@ def _poisson_fallback(rnd, lam):
             break
     return k - 1
 
+
+
+def unit_transferable(mark, m, P):
+    """Переводимость единицы в месяце m: recurring — пока m <= mark + grace
+    (mark — метка периода единицы; передачей не обновляется); std — с
+    месяца mark (mark хранит месяц переводимости, как в этапе 1.2)."""
+    if P.recurring:
+        return m <= mark + P.recurring_grace
+    return mark <= m
 
 
 def fee_rate_step(growth, rate, P):
@@ -231,6 +257,10 @@ def simulate(P: Params, run_seed: int):
     fee_rate = P.fee_rate_min if P.adaptive_fee else P.transfer_fee_rate
     supply_snapshots = []         # [(эпоха=месяц, total_supply)] — окно K+1 снимков
     growth_window = float("nan")  # последний измеренный рост за окно K
+    # --- блок 4: recurring-метки ---
+    farm_dead = 0.0               # сгоревший непроданный сток фермы (мёртвые единицы)
+    honest_used = 0.0             # потреблено честными (redeem поставщику)
+    honest_dead = 0.0             # сгоревшая непотреблённая квота честных
 
     def adjust_fee_rate(m):
         """Пересчёт ставки на границе эпохи (механика core/ledger/fee.go):
@@ -390,7 +420,9 @@ def simulate(P: Params, run_seed: int):
             if w.kind == "h":
                 n_h += 1
                 w.bal += amount
-                if P.fresh_window > 0:
+                if P.recurring:
+                    w.fresh.append((amount, m - 1))  # квота периода m-1 (M4)
+                elif P.fresh_window > 0:
                     w.fresh.append((amount, m + P.fresh_window))
                 h_act.append(i)
                 h_cost[i] = cost
@@ -403,25 +435,88 @@ def simulate(P: Params, run_seed: int):
                 farm_units_net += net
                 farm_cost += P.power_cost
                 w.bal += net
-                w.fresh.append((net, m + P.fresh_window))
+                if P.recurring:
+                    w.fresh.append((net, m - 1))  # квота периода m-1 (M4)
+                else:
+                    w.fresh.append((net, m + P.fresh_window))
                 f_cnt += 1
                 f_bal_sum += w.bal
+                # блок 4: сгорание по метке — единица периода P непереводима
+                # после границы P+1 (v9.10); мёртвый сток (в протоколе не
+                # сброс — остаётся в балансе; в модели убран из баланса и
+                # учтён в farm_dead: демереджа в профиле 8 нет)
+                if P.recurring:
+                    dead = 0.0
+                    keep = []
+                    for a, mark in w.fresh:
+                        if unit_transferable(mark, m, P):
+                            keep.append((a, mark))
+                        else:
+                            dead += a
+                    if dead > 0.0:
+                        w.fresh = keep
+                        w.bal -= dead
+                        f_bal_sum -= dead
+                        farm_dead += dead
                 # продажа переводимого (мораторий считается от register;
-                # стратегия фермы — блок 3: monthly / batch / low_rate)
+                # стратегия фермы — блок 3: monthly / batch / low_rate;
+                # блок 4: ликвидность сбыта farm_sell_capacity)
                 if m - w.reg >= P.moratorium_months and farm_may_sell(m):
                     amt = 0.0
                     keep = []
                     for a, rel in w.fresh:
-                        if rel <= m:
+                        if unit_transferable(rel, m, P):
                             amt += a
                         else:
                             keep.append((a, rel))
-                    if amt > 0.0:
+                    # ликвидность: продаём долю переводимого, остальное
+                    # остаётся в fresh (в recurring — сгорит на границе)
+                    sold = amt * P.farm_sell_capacity
+                    rest = amt - sold
+                    if rest > 1e-12 and amt > 0.0:
+                        frac = rest / amt
+                        keep2 = []
+                        for a, rel in w.fresh:
+                            if unit_transferable(rel, m, P) and a > 0.0:
+                                keep2.append((a * frac, rel))
+                            else:
+                                keep2.append((a, rel))
+                        w.fresh = keep2
+                    elif amt > 0.0:
                         w.fresh = keep
-                        w.bal -= amt
-                        f_bal_sum -= amt
-                        exec_m = m + P.delay_lag_months if amt > P.delay_threshold else m
-                        sales_new.append((exec_m, amt))
+                    if sold > 0.0:
+                        w.bal -= sold
+                        f_bal_sum -= sold
+                        exec_m = m + P.delay_lag_months if sold > P.delay_threshold else m
+                        sales_new.append((exec_m, sold))
+
+        # блок 4: потребление квоты честными (redeem поставщику; профиль 8:
+        # единица уходит поставщику — из модели; непотреблённое в окне
+        # сгорает по метке — для честного это неубыток, ресурс был не нужен)
+        if P.honest_use_rate > 0.0 and h_act:
+            for i in h_act:
+                w = wallets[i]
+                used = 0.0
+                if w.fresh:
+                    keep = []
+                    for a, mark in w.fresh:
+                        if unit_transferable(mark, m, P):
+                            u = a * P.honest_use_rate
+                            used += u
+                            if a - u > 1e-12:
+                                keep.append((a - u, mark))
+                        else:
+                            if P.recurring:
+                                honest_dead += a  # сгоревшая непотреблённая
+                            else:
+                                keep.append((a, mark))
+                    w.fresh = keep
+                else:
+                    used = w.bal * P.honest_use_rate
+                if used > 0.0:
+                    w.bal -= used
+                    h_bal_sum -= used
+                    honest_used += used
 
         # траты честных (экономика честных; отдельный поток er)
         if P.honest_turnover > 0.0 and h_act:
@@ -479,6 +574,9 @@ def simulate(P: Params, run_seed: int):
             "fee_rate_pct": 100.0 * fee_rate,
             "total_supply": supply_minted - supply_burned,
             "supply_growth_window_pct": 100.0 * growth_window if growth_window == growth_window else float("nan"),
+            "farm_dead_units": farm_dead,
+            "honest_used_units": honest_used,
+            "honest_dead_units": honest_dead,
         })
     return rows
 
@@ -850,6 +948,115 @@ def block3_params(runs: int, out: str, group_filter=None):
                  "Блок 3-params (цель 15%/окно)")
 
 
+def block4_scenarios(base: Params):
+    """Сценарии блока 4 (профиль 8, v9.10): равная квота за период
+    с периодной меткой. База профиля 8: quota_reset (base_mint за период),
+    комиссия 0 (fee_mode none), демереджа нет, fresh_window 0 (квота
+    переводима сразу — шаблон 8), мораторий 14 дней, peer-redeem.
+    Вопросы блока: накапливает ли ферма квоты сверх периода (нет —
+    сгорание на границе P+grace); эффект сгорания на экономику фермы
+    (перетекание остатка исключено); обходы (массовый слив в конце
+    периода, кольца peer-redeem, передача перед границей); безубыточная
+    цена единицы фермера vs честного участника."""
+    mor14 = 14.0 / 30.0
+
+    def p8(**kw):
+        d = dict(fresh_window=0, moratorium_months=mor14,
+                 transfer_fee_rate=0.0, transfer_fee_min=0.0,
+                 demurrage_rate=0.0, honest_turnover=0.0)
+        d.update(kw)
+        return replace(base, **d)
+
+    g = {}
+
+    # 1) recurring против std: накапливает ли ферма квоты сверх периода
+    g["1 rec (grace 1)"] = p8(recurring=True)
+    g["1 std (без метки)"] = p8()
+
+    # 2) окно сгорания: grace 0/1/2 (ядро — 1: граница P+1)
+    for gr in (0, 1, 2):
+        g[f"2 rec grace {gr}"] = p8(recurring=True, recurring_grace=gr)
+
+    # 3) ликвидность сбыта: непроданное в окне сгорает (rec) против
+    # накопления (std) — прямой убыток фермы от сгорания
+    for cap in (0.25, 0.5, 1.0):
+        g[f"3 rec ликвидность {cap:g}"] = p8(recurring=True, farm_sell_capacity=cap)
+        g[f"3 std ликвидность {cap:g}"] = p8(farm_sell_capacity=cap)
+
+    # 4) обходы: копить нельзя — batch сгорает; «слив в конце периода» —
+    # единственная стратегия (monthly); кольцо peer-redeem не обновляет
+    # метку (передача своим перед границей = удержание, см. тесты)
+    g["4 rec ферма: ежемесячный слив"] = p8(recurring=True, farm_sell_mode="monthly")
+    g["4 rec ферма: накопление 6 мес"] = p8(recurring=True, farm_sell_mode="batch")
+    g["4 std ферма: накопление 6 мес"] = p8(farm_sell_mode="batch")
+    g["4 rec кольцо peer-redeem (= удержание)"] = p8(
+        recurring=True, farm_sell_capacity=0.5)
+
+    # 5) мораторий в rec: окно жизни единицы 1 мес — мораторий съедает
+    # его у новых кошельков фермы (первая квота сгорает частично/целиком)
+    for days in (0, 14, 30):
+        g[f"5 rec мораторий {days} д"] = p8(
+            recurring=True, moratorium_months=days / 30.0)
+
+    # 6) честные: потребление квоты (redeem поставщику); непотреблённое
+    # сгорает — но честному не нужно продавать (безубыточная цена 0),
+    # метрика — доля потреблённого
+    for ur in (0.5, 0.75, 1.0):
+        g[f"6 rec потребление {ur:g}"] = p8(recurring=True, honest_use_rate=ur)
+
+    return g
+
+
+def block4(runs: int, out: str, group_filter=None):
+    """Блок 4 (профиль 8, v9.10): recurring-квоты против std — сгорание,
+    обходы, ликвидность, мораторий, потребление честных."""
+    groups = block4_scenarios(Params())
+    if group_filter:
+        groups = {k: v for k, v in groups.items() if group_filter.lower() in k.lower()}
+    os.makedirs(out, exist_ok=True)
+    print(f"Блок 4 (профиль 8, recurring): {runs} прогонов на сценарий; "
+          f"порог пересечения ${CROSS_PRICE}")
+    hdr = (f"{'сценарий':40s} | {'доля ф. m60':>10s} | {'$ m38':>7s} | {'$ m60':>7s} | "
+           f"{'сток ф.':>8s} | {'сгорело ф.':>10s} | {'потребл. честн.':>14s}")
+    print(hdr)
+    summary = []
+    for name, P in groups.items():
+        runs_rows = [simulate(P, s) for s in range(1, runs + 1)]
+        mean_rows = aggregate(runs_rows)
+        crosses = [crossing_month(r) for r in runs_rows]
+        cross_med = statistics.median([c if c is not None else P.months + 1 for c in crosses])
+        m60 = mean_rows[59]
+        m38 = mean_rows[37]
+        used_net = m60["honest_used_units"] + m60["honest_dead_units"]
+        used_pct = 100.0 * m60["honest_used_units"] / used_net if used_net else 0.0
+        print(f"{name:40s} | {100*m60['farm_share']:9.1f}% | {m38['breakeven_price']:7.4f} | "
+              f"{m60['breakeven_price']:7.4f} | {m60['farm_stock_mean']:8.0f} | "
+              f"{m60['farm_dead_units']:10.0f} | {used_pct:13.1f}%")
+        summary.append({
+            "scenario": name, "farm_share_m60": 100 * m60["farm_share"],
+            "breakeven_m38": m38["breakeven_price"], "breakeven_m60": m60["breakeven_price"],
+            "crossing_001_median": cross_med,
+            "farm_stock_mean_m60": m60["farm_stock_mean"],
+            "farm_dead_units_m60": m60["farm_dead_units"],
+            "farm_units_net_m60": m60["farm_units_net"],
+            "farm_sold_units_m60": m60["farm_sold_units"],
+            "honest_used_units_m60": m60["honest_used_units"],
+            "honest_dead_units_m60": m60["honest_dead_units"],
+            "honest_used_pct_m60": used_pct,
+        })
+        fname = os.path.join(out, "b4_" + name.replace(" ", "_").replace("/", "-").replace(":", "").replace("%", "proc").replace(",", "") + ".csv")
+        with open(fname, "w", newline="", encoding="utf-8") as f:
+            wr = csv.DictWriter(f, fieldnames=list(mean_rows[0].keys()))
+            wr.writeheader()
+            wr.writerows(mean_rows)
+    sname = os.path.join(out, "block4_summary.csv")
+    with open(sname, "w", newline="", encoding="utf-8") as f:
+        wr = csv.DictWriter(f, fieldnames=list(summary[0].keys()))
+        wr.writeheader()
+        wr.writerows(summary)
+    print(f"\nCSV сохранены в: {out}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--runs", type=int, default=8, help="число прогонов Монте-Карло на сценарий")
@@ -859,6 +1066,7 @@ def main():
     ap.add_argument("--stage12", action="store_true", help="свеепы экономических параметров этапа 1.2")
     ap.add_argument("--block3", action="store_true", help="блок 3: адаптивная комиссия, демередж, мораторий (№44)")
     ap.add_argument("--block3-params", action="store_true", help="контрольный прогон цели 15%/окно (11.4)")
+    ap.add_argument("--block4", action="store_true", help="блок 4: recurring-квоты профиля 8 (v9.10)")
     ap.add_argument("--group", default=None, help="фильтр сценариев stage12 по подстроке имени")
     args = ap.parse_args()
 
@@ -868,6 +1076,9 @@ def main():
 
     if args.stage12:
         stage12(args.runs, args.out, args.group)
+
+    if args.block4:
+        block4(args.runs, os.path.join("results"), args.group)
         return
 
     if args.block3:

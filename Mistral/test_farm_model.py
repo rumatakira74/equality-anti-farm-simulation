@@ -4,14 +4,18 @@
 # стратегии фермы, учёт предложения, мораторий; канарейка базы 1.1.
 # Запуск:  python3 -m unittest discover -s Mistral -p "test_*.py" -v
 import math
+import random
 import sys
 import unittest
 from dataclasses import replace
 
 sys.path.insert(0, "Mistral")
-from farm_model import (Params, simulate, fee_rate_step,  # noqa: E402
+from farm_model import (Params, W, simulate, fee_rate_step,  # noqa: E402
                         unit_transferable, block3_scenarios, block3_params_scenarios,
-                        block4_scenarios)
+                        block4_scenarios, pow_iterations, pow_cost_per_wallet,
+                        pow_hardware_advantage, mint_window_amount, a9_scenarios,
+                        payback_month, DEVICE_COST_PUBLIC, BYPASS_PROFILE_USD,
+                        BYPASS_RESET_USD)
 
 
 class TestFeeRateStep(unittest.TestCase):
@@ -305,3 +309,184 @@ class TestBlock4Recurring(unittest.TestCase):
         self.assertTrue(any("кольцо" in k for k in g))
         self.assertTrue(any("мораторий" in k for k in g))
         self.assertTrue(any("потребление" in k for k in g))
+
+
+class TestA9PlatformFacts(unittest.TestCase):
+    """Тема A9, шаг 0: факты из кода tnp main — таргеты PoW и Argon2id."""
+
+    def test_pow_iterations_from_targets(self):
+        # TargetHard = 0x0100_0000_0000_0000 = 2^56 -> 2^64/2^56 = 256 итераций
+        # TargetLight = 0x0000_0100_0000_0000 = 2^40 -> 2^24 = 16 777 216
+        it = pow_iterations(Params())
+        self.assertEqual(it["hard"], 256.0)
+        self.assertEqual(it["light"], float(2 ** 24))
+
+    def test_pow_cost_is_negligible(self):
+        c = pow_cost_per_wallet(Params())
+        # 256 × 22,63 мс × 3 (телефон) ≈ 17,4 с на выпуск
+        self.assertGreater(c["month_seconds"], 10.0)
+        self.assertLess(c["month_seconds"], 30.0)
+        # электричество: 17,4 с × 4 Вт ≈ 1,9e-5 кВт·ч ≈ $3e-6
+        self.assertLess(c["month_usd"], 1e-4)
+        self.assertLess(c["reg_usd"], 1e-3)
+
+    def test_pow_attended_adds_labor(self):
+        c = pow_cost_per_wallet(replace(Params(), pow_attended=True))
+        # 17,4 с при $10/ч ≈ $0,048 — время оператора доминирует
+        self.assertGreater(c["month_usd"], 0.01)
+        self.assertGreater(c["month_usd"],
+                           1000 * pow_cost_per_wallet(Params())["month_usd"])
+
+    def test_hardware_advantage_numbers(self):
+        h = pow_hardware_advantage(Params())
+        # телефон ~14,7 итераций/с; GPU (360 ГБ/с, 32 МиБ × 2) ~2,7 тыс/с
+        self.assertGreater(h["gpu_vs_phone"], 100.0)
+        self.assertGreater(h["asic_vs_phone"], h["gpu_vs_phone"])
+        self.assertLess(h["phone_evals_s"], 20.0)
+
+
+class TestA9DeviceCost(unittest.TestCase):
+    """A9 п.3: стоимость устройства $200 (README) и чувствительность."""
+
+    def test_device_cost_scales_breakeven(self):
+        # стоимость устройства не влияет на динамику (доля фермы), только на $
+        b120 = simulate(replace(Params(), device_cost=120.0), 1)
+        b200 = simulate(replace(Params(), device_cost=200.0), 1)
+        b300 = simulate(replace(Params(), device_cost=300.0), 1)
+        self.assertEqual(b120[59]["farm_active"], b200[59]["farm_active"])
+        self.assertEqual(b200[59]["farm_active"], b300[59]["farm_active"])
+        self.assertLess(b120[59]["breakeven_price"], b200[59]["breakeven_price"])
+        self.assertLess(b200[59]["breakeven_price"], b300[59]["breakeven_price"])
+        # почти линейно по стоимости устройства (power_cost — малая добавка)
+        ratio = b300[59]["breakeven_price"] / b120[59]["breakeven_price"]
+        self.assertTrue(2.2 < ratio < 2.6, ratio)
+
+    def test_public_value_is_200(self):
+        self.assertEqual(DEVICE_COST_PUBLIC, 200.0)
+        g = a9_scenarios(Params())
+        self.assertEqual(g["1 база 7.7 на $200 (README)"].device_cost, 200.0)
+
+
+class TestA9WalletsPerDevice(unittest.TestCase):
+    """A9 п.2: кошельков на устройство — обход A1 и его издержки."""
+
+    def test_more_wallets_lower_cost_per_wallet(self):
+        one = simulate(Params(), 1)
+        two = simulate(replace(Params(), wallets_per_device=2,
+                               bypass_cost_per_wallet=BYPASS_PROFILE_USD), 1)
+        four = simulate(replace(Params(), wallets_per_device=4,
+                                bypass_cost_per_wallet=BYPASS_PROFILE_USD), 1)
+        # устройство делится на кошельки -> стоимость кошелька падает
+        c1 = one[59]["farm_cost_usd"] / one[59]["farm_active"]
+        c2 = two[59]["farm_cost_usd"] / two[59]["farm_active"]
+        c4 = four[59]["farm_cost_usd"] / four[59]["farm_active"]
+        self.assertGreater(c1, c2)
+        self.assertGreater(c2, c4)
+        # и ферма успевает больше кошельков на тот же бюджет (на m60 оба
+        # упираются в потолок 2000, поэтому сверка на m30)
+        self.assertGreater(two[29]["farm_active"], one[29]["farm_active"])
+        self.assertGreater(four[29]["farm_active"], two[29]["farm_active"])
+        self.assertEqual(four[59]["farm_active"], 2000)
+
+    def test_bypass_cost_ordering(self):
+        prof = simulate(replace(Params(), wallets_per_device=2,
+                                bypass_cost_per_wallet=BYPASS_PROFILE_USD), 1)
+        reset = simulate(replace(Params(), wallets_per_device=2,
+                                 bypass_cost_per_wallet=BYPASS_RESET_USD), 1)
+        self.assertLess(prof[59]["breakeven_price"], reset[59]["breakeven_price"])
+        self.assertGreater(BYPASS_RESET_USD, BYPASS_PROFILE_USD)
+
+
+class TestA9MintWindow(unittest.TestCase):
+    """A9 п.5: окно челленджа mint — достижимость 1/15, accrual 6, поглощение."""
+
+    def test_fixed_mode_no_losses(self):
+        rows = simulate(Params(), 1)
+        for r in rows:
+            self.assertEqual(r["honest_blocked"], 0)
+            self.assertEqual(r["farm_blocked"], 0)
+            self.assertAlmostEqual(r["honest_mint_units"], r["honest_minting"] * 1000.0)
+            self.assertAlmostEqual(r["farm_mint_units"], r["farm_minting"] * 1000.0)
+
+    def test_absorbing_probability(self):
+        # P(6 пропусков подряд) = (1 - 1/15)^6 = 0,6608 — как в мандате (~66 %)
+        self.assertAlmostEqual((1.0 - 1.0 / 15.0) ** 6, 0.6608, places=3)
+
+    def test_code_mode_honest_loss_farm_automated(self):
+        base = simulate(Params(), 1)
+        code = simulate(replace(Params(), mint_window_mode="code",
+                                farm_window_automation=1.0), 1)
+        # ферма с автоматизацией не теряет выпуск, честные теряют почти весь
+        self.assertAlmostEqual(code[59]["farm_mint_units"],
+                               code[59]["farm_minting"] * 1000.0)
+        self.assertGreater(code[59]["honest_blocked"], 0)
+        self.assertLess(code[59]["honest_mint_units"],
+                        0.5 * base[59]["honest_mint_units"])
+        # доля фермы не меняется: выпуск не влияет на активацию
+        self.assertAlmostEqual(code[59]["farm_share"], base[59]["farm_share"])
+
+    def test_code_mode_farm_suffers(self):
+        auto = simulate(replace(Params(), mint_window_mode="code",
+                                farm_window_automation=1.0), 1)
+        manual = simulate(replace(Params(), mint_window_mode="code",
+                                  farm_window_automation=0.0), 1)
+        self.assertGreater(manual[59]["farm_blocked"], 0)
+        self.assertLess(manual[59]["farm_mint_units"], auto[59]["farm_mint_units"])
+        self.assertGreater(manual[59]["breakeven_price"], auto[59]["breakeven_price"])
+
+    def test_reach_one_equals_fixed(self):
+        # достижимость 1,0 -> каждый период в окне -> выпуск как в базе
+        code = simulate(replace(Params(), mint_window_mode="code",
+                                mint_window_reach=1.0), 1)
+        base = simulate(Params(), 1)
+        self.assertAlmostEqual(code[59]["farm_units_net"], base[59]["farm_units_net"])
+        self.assertAlmostEqual(code[59]["breakeven_price"], base[59]["breakeven_price"])
+
+    def test_absorbing_state_direct(self):
+        # пропуск 7 периодов: diff > accrual_window -> блокировка навсегда
+        P = Params(mint_window_mode="code")
+        w = W("h", 0)
+        w.act = 0
+        w.last_claim = 0
+        wr = random.Random(1)
+        self.assertEqual(mint_window_amount(P, w, 8, wr), 0.0)  # period 7, diff 7 > 6
+        self.assertTrue(w.blocked)
+        self.assertEqual(mint_window_amount(P, w, 9, wr), 0.0)
+
+
+class TestA9Scenarios(unittest.TestCase):
+    """Сценарии A9 покрывают вопросы мандата; база 1.1 не тронута."""
+
+    def test_scenarios_present(self):
+        g = a9_scenarios(Params())
+        self.assertEqual(len(g), 14)
+        for name in ("0 база 7.7 (как в коде: $120)",
+                     "1 база 7.7 на $200 (README)",
+                     "2 устройство $300",
+                     "3 2 кош./устр. (профили Android)",
+                     "3 4 кош./устр. (factory reset)",
+                     "4 PoW по факту (2^56/2^40)",
+                     "5 окно mint: после фикса A (0%)",
+                     "5 окно mint: как в коде (ферма авто)",
+                     "5 окно mint: как в коде (ферма страдает)",
+                     "6 всё: $200 + 2 кош./устр. + PoW + окно (авто)"):
+            self.assertIn(name, g)
+        self.assertEqual(g["0 база 7.7 (как в коде: $120)"].device_cost, 120.0)
+        self.assertEqual(g["1 база 7.7 на $200 (README)"].device_cost, 200.0)
+
+    def test_base_defaults_untouched(self):
+        # дефолт Params() — историческая база 1.1 ($120), новые режимы выключены
+        P = Params()
+        self.assertEqual(P.device_cost, 120.0)
+        self.assertEqual(P.wallets_per_device, 1)
+        self.assertFalse(P.pow_actual)
+        self.assertEqual(P.mint_window_mode, "fixed")
+
+    def test_payback_metric(self):
+        rows = simulate(Params(), 1)
+        pb = payback_month(rows)
+        self.assertIsNotNone(pb)
+        self.assertGreater(pb, 12)  # не ложная окупаемость в нулевом месяце
+        # окупаемость при $0,01 совпадает с пересечением безубыточной цены
+        below = [r["month"] for r in rows if r["breakeven_price"] < 0.01]
+        self.assertEqual(pb, min(below))

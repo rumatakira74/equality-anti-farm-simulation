@@ -35,8 +35,21 @@
 консервативно для защитных утверждений). Вынужденный запас — только свежие
 выпуски в окне fresh_window.
 
+Тема A9 (пересчёт раздела 7.7 под фактические параметры платформы; по умолчанию
+ВЫКЛЮЧЕНО, база 1.1 не меняется):
+  * кошельков на устройство: 1:1 после фикса A1 (SPKI листа аттестации =
+    AttestedPublicKey) — дефолт; 2/4 — обход через профили пользователя Android
+    или factory reset, с издержками обхода на кошелёк;
+  * стоимость PoW из фактических таргетов tnp main: TargetLight 2^40 -> 2^24
+    итераций SHA-256, TargetHard 2^56 -> 256 итераций Argon2id 32 МиБ × 1;
+    время и электричество на кошелёк рядом с устройством и поручительством;
+  * окно челленджа mint: «после фикса A» (окно достижимо каждый период, 0 %
+    потерь) или «как в коде» (достижимость 1/15 за период; accrual_window 6 ->
+    поглощающее состояние при 6 пропусках подряд).
+
 Что НЕ моделируется (упрощения): подписи, сеть, финализация, PoW как вычисление
-(он заменён стоимостью power_cost), адаптация поведения честных к демереджу/комиссии,
+(в базе 1.1 он заменён стоимостью power_cost; в теме A9 — стоимостью из
+фактических таргетов), адаптация поведения честных к демереджу/комиссии,
 ограниченная ликвидность сбыта фермы, рынок курса. Результаты 1.1 (K, слоты,
 R, посевной круг) зафиксированы и не меняются.
 
@@ -50,6 +63,8 @@ R, посевной круг) зафиксированы и не меняютс�
          python3 farm_model.py --block3       # блок 3: адаптивная комиссия (№44)
          python3 farm_model.py --block3-params # контроль цели 15%/окно (11.4)
          python3 farm_model.py --block4       # блок 4: recurring-квоты профиля 8
+         python3 farm_model.py --a9           # тема A9: фактические параметры платформы
+         python3 farm_model.py --a9 --seed 3  # один прогон (воспроизведение байт-в-байт)
          python3 farm_model.py --stage12 --group демередж   # одна группа
          python3 farm_model.py --runs 20       # больше прогонов Монте-Карло
 """
@@ -70,6 +85,17 @@ except ImportError:  # патч без numpy: точная выборка Пуа
 warnings.filterwarnings("ignore", message="Mean of empty slice")
 
 CROSS_PRICE = 0.01  # порог безубыточной цены для метрики «месяц пересечения», $
+
+# Тема A9: публичное значение стоимости устройства (README, раздел 7.7) и
+# издержки обходов «кошельков на устройство» на кошелёк (время оператора,
+# риск, повторные расходы входа). База 1.1 в коде держала $120 — историческое
+# значение оставлено дефолтом Params(), чтобы канарейка 1.1 проходила;
+# сценарии A9 берут публичные $200.
+DEVICE_COST_PUBLIC = 200.0
+BYPASS_PROFILE_USD = 2.0   # профиль пользователя Android: ~10 мин настройки
+                           # ($10/ч) + риск блокировки профиля
+BYPASS_RESET_USD = 25.0    # factory reset: ~20–30 мин + потеря данных и
+                           # возраста прежнего кошелька (ключ в Keystore стирается)
 
 # Опубликованные средние базы 1.1 (KNOWLEDGE.md 7.7; 8 прогонов): месяц -> (честные, ферма, доля %)
 PUBLISHED_BASE = {12: (232, 38, 13.9), 24: (568, 334, 36.8), 60: (8348, 1140, 12.1)}
@@ -157,12 +183,50 @@ class Params:
                                     # (ограниченная ликвидность сбыта)
     honest_use_rate: float = 0.0   # доля квоты, потребляемая честным в месяц
                                     # (redeem поставщику; 0 = не моделировать)
+    # --- тема A9: фактические параметры платформы (tnp main, шаг 0) ---
+    # Все новые механизмы по умолчанию ВЫКЛЮЧЕНЫ: база 1.1, её RNG и потоки
+    # динамики не тронуты (канарейка 1.1 до и после).
+    # Кошельков на устройство: 1 — дефолт после фикса A1 (SPKI листа
+    # аттестации = AttestedPublicKey); 2/4 — обход (профили Android /
+    # factory reset) с издержками обхода на кошелёк.
+    wallets_per_device: int = 1
+    bypass_cost_per_wallet: float = 0.0  # издержки обхода на кошелёк, $
+    # PoW из фактических таргетов (core/params/params.go,
+    # core/profiles/profiles.go): TargetLight = 0x0000_0100_0000_0000 = 2^40
+    # (2^24 итераций SHA-256), TargetHard = 0x0100_0000_0000_0000 = 2^56
+    # (256 итераций Argon2id), Argon2id 32768 КиБ × 1 итерация × p=1.
+    pow_actual: bool = False        # True: стоимость PoW из таргетов вместо power_cost
+    pow_target_light: int = 1 << 40
+    pow_target_hard: int = 1 << 56
+    argon2_mem_kib: int = 32768
+    argon2_iterations: int = 1
+    argon2_parallelism: int = 1
+    pow_eval_ms: float = 22.63      # замер Argon2id 32 МиБ × 1 × p=1 (шаг 0, хост)
+    pow_light_ms: float = 590.0     # замер лёгкого PoW 2^24 (reports/stage6/pow-host.md)
+    pow_phone_slowdown: float = 3.0  # средний телефон против хоста
+    pow_watts: float = 4.0          # Вт при счёте (телефон)
+    energy_price_kwh: float = 0.15  # $/кВт·ч
+    pow_attended: bool = False      # время оператора оплачивается (иначе — нет)
+    operator_hour_usd: float = 10.0  # цена часа оператора фермы
+    gpu_bandwidth_bps: float = 360e9  # GPU класса RTX 3060, 360 ГБ/с
+    gpu_efficiency: float = 0.5
+    asic_bandwidth_bps: float = 1e12  # HBM-ASIC, 1 ТБ/с
+    asic_efficiency: float = 0.5
+    # Окно челленджа mint (7.6): слот внутри периода, M4 «только завершённые»
+    # -> достижимы только слоты последних 48 ч периода: 48/720 = 1/15 = 6,67 %.
+    # "fixed" — после фикса A (окно достижимо каждый период, 0 % потерь);
+    # "code"  — как в коде сейчас (независимая достижимость 1/15 за период).
+    mint_window_mode: str = "fixed"
+    mint_window_reach: float = 1.0 / 15.0
+    mint_accrual_window: int = 6     # accrual_window_periods (ядро, M5)
+    farm_window_automation: float = 1.0  # доля кошельков фермы, попадающих в окно
+                                         # (слот H(addr||period) публичен -> 1.0)
 
 
 class W:
     """Кошелёк."""
     __slots__ = ("kind", "reg", "act", "seed", "vouches", "out", "h_vouchers",
-                 "bal", "fresh")
+                 "bal", "fresh", "last_claim", "blocked")
 
     def __init__(self, kind, reg, seed=False):
         self.kind = kind            # 'h' честный, 'f' ферма
@@ -174,6 +238,10 @@ class W:
         self.h_vouchers = 0          # сколько честных среди поручителей (для утечки награды)
         self.bal = 0.0               # номинальный остаток (демередж применяется к нему)
         self.fresh = []             # [(сумма, месяц переводимости)] — свежие выпуски
+        # A9: последний заявленный период (M3/M5) и поглощающее состояние окна
+        # mint; у посевного круга первый выпуск — месяц 0 за период -1 (база -2)
+        self.last_claim = -2 if seed else None
+        self.blocked = False
 
 
 def _poisson_fallback(rnd, lam):
@@ -223,6 +291,86 @@ def fee_rate_step(growth, rate, P):
     return min(P.fee_rate_max, max(P.fee_rate_min, rate))
 
 
+def pow_iterations(P):
+    """Ожидаемое число итераций PoW из таргетов (HashBelowTarget: uint64 < target)."""
+    return {"hard": (1 << 64) / P.pow_target_hard,
+            "light": (1 << 64) / P.pow_target_light}
+
+
+def pow_cost_per_wallet(P):
+    """Стоимость PoW на кошелёк из фактических таргетов (шаг 0, tnp main).
+
+    register — усиленный PoW + лёгкий, выпуск — усиленный (раз в период).
+    Время: замер хоста × замедление телефона; деньги: электричество
+    (Вт × с) и, если pow_attended, время оператора.
+    """
+    it = pow_iterations(P)
+    eval_s = (P.pow_eval_ms / 1000.0) * P.pow_phone_slowdown
+    light_s = (P.pow_light_ms / 1000.0) * P.pow_phone_slowdown
+    hard_s = it["hard"] * eval_s
+    reg_s = hard_s + light_s
+    month_s = hard_s
+
+    def usd(sec):
+        cost = sec * P.pow_watts / 3.6e6 * P.energy_price_kwh
+        if P.pow_attended:
+            cost += sec / 3600.0 * P.operator_hour_usd
+        return cost
+
+    return {"hard_iters": it["hard"], "light_iters": it["light"],
+            "hard_seconds": hard_s, "light_seconds": light_s,
+            "reg_seconds": reg_s, "month_seconds": month_s,
+            "reg_usd": usd(reg_s), "month_usd": usd(month_s)}
+
+
+def pow_hardware_advantage(P):
+    """Во сколько раз GPU/ASIC быстрее среднего телефона на memory-hard
+    Argon2id (32 МиБ × 1 × p=1): оценка по полосе памяти (запись + чтение
+    32 МиБ на итерацию), не паритет."""
+    phone = 1.0 / ((P.pow_eval_ms / 1000.0) * P.pow_phone_slowdown)
+    per_eval = 2.0 * P.argon2_mem_kib * 1024.0
+    gpu = P.gpu_bandwidth_bps / per_eval * P.gpu_efficiency
+    asic = P.asic_bandwidth_bps / per_eval * P.asic_efficiency
+    return {"phone_evals_s": phone, "gpu_evals_s": gpu, "asic_evals_s": asic,
+            "gpu_vs_phone": gpu / phone, "asic_vs_phone": asic / phone}
+
+
+def mint_window_amount(P, w, m, wr):
+    """Выпуск кошелька w за месяц m при окне челленджа «как в коде» (A9).
+
+    period = m - 1 (M4: заявляется завершённый период); база — период
+    активации - 1; diff > accrual_window -> заявка невозможна никогда
+    (поглощающее состояние: LastClaimedPeriod не растёт, а окно периода
+    закрыто). Попадание в окно даёт выпуск за все пропущенные периоды
+    (M6: amount = issuance × diff), пропуск — 0.
+    """
+    period = m - 1
+    if w.blocked:
+        return 0.0
+    diff = period - w.last_claim
+    if diff > P.mint_accrual_window:
+        w.blocked = True
+        return 0.0
+    p = P.mint_window_reach
+    if w.kind == "f":
+        # слот H(addr||period) публичен: автоматизированная ферма попадает
+        # в окно всегда; доля автоматизации — параметр
+        p = P.farm_window_automation + (1.0 - P.farm_window_automation) * P.mint_window_reach
+    if wr.random() < p:
+        w.last_claim = period
+        return P.base_mint * diff
+    return 0.0
+
+
+def payback_month(rows):
+    """Первый месяц, когда накопленная прибыль фермы (при unit_price) >= 0
+    после начала расходов (иначе нулевой месяц 1 даёт ложную окупаемость)."""
+    for r in rows:
+        if r["farm_cost_usd"] > 0.0 and r["farm_profit_usd"] >= 0.0:
+            return r["month"]
+    return None
+
+
 def simulate(P: Params, run_seed: int):
     if np is not None:
         rng = np.random.default_rng(run_seed)
@@ -233,6 +381,14 @@ def simulate(P: Params, run_seed: int):
     rnd = random.Random(run_seed)
     # отдельный поток для экономики честных (не трогает поток динамики роста)
     er = random.Random(run_seed * 7919 + 1)
+    # отдельный поток для окна челленджа mint (A9; при "fixed" не потребляется)
+    wr = random.Random(run_seed * 104729 + 7)
+    # стоимость PoW из фактических таргетов (A9; при pow_actual=False — 0)
+    if P.pow_actual:
+        _pow = pow_cost_per_wallet(P)
+        pow_reg_cost, pow_month_cost = _pow["reg_usd"], _pow["month_usd"]
+    else:
+        pow_reg_cost = pow_month_cost = 0.0
     wallets = []
     for _ in range(P.seed_count):
         w = W("h", -999, seed=True)
@@ -325,6 +481,8 @@ def simulate(P: Params, run_seed: int):
             w = wallets[cid]
             w.act = m
             w.h_vouchers = sum(1 for v, _ in w.vouches if wallets[v].kind == "h")
+            # A9: база выпуска — период активации - 1 (M4, «без ретро-начислений»)
+            w.last_claim = m - 1
 
         def process(cid, pool, prob):
             w = wallets[cid]
@@ -365,12 +523,16 @@ def simulate(P: Params, run_seed: int):
 
         # ферма
         if m >= P.farm_start:
-            n_reg = max(0, min(P.farm_new_per_month, P.farm_max_wallets - farm_total))
+            # A9: устройство даёт wallets_per_device кошельков (1 — после A1);
+            # устройство оплачивается на устройство, обход — на кошелёк
+            n_reg = max(0, min(P.farm_new_per_month * P.wallets_per_device,
+                               P.farm_max_wallets - farm_total))
             for _ in range(n_reg):
                 wallets.append(W("f", m))
                 pend_f.append(len(wallets) - 1)
                 farm_total += 1
-                farm_cost += P.device_cost
+                farm_cost += (P.device_cost / P.wallets_per_device
+                              + P.bypass_cost_per_wallet + pow_reg_cost)
             # проникновение к честным поручителям
             k_inf = int(poisson(P.infiltrate_per_month))
             fresh = [c for c in pend_f if not wallets[c].vouches]
@@ -402,6 +564,7 @@ def simulate(P: Params, run_seed: int):
         h_bal_sum = 0.0
         f_bal_sum = 0.0
         f_cnt = 0
+        h_mint_sum = f_mint_sum = 0.0
         sales_new = []
         for i, w in enumerate(wallets):
             if w.act is None or w.act >= m:
@@ -416,9 +579,12 @@ def simulate(P: Params, run_seed: int):
                 if w.kind == "f":
                     farm_burned += burn
             amount = P.base_mint
+            if P.mint_window_mode == "code":
+                amount = mint_window_amount(P, w, m, wr)
             supply_minted += amount  # полный выпуск в предложение (утечка R — перевод, не сжигание)
             if w.kind == "h":
                 n_h += 1
+                h_mint_sum += amount
                 w.bal += amount
                 if P.recurring:
                     w.fresh.append((amount, m - 1))  # квота периода m-1 (M4)
@@ -429,16 +595,18 @@ def simulate(P: Params, run_seed: int):
                 h_bal_sum += w.bal
             else:
                 n_f += 1
+                f_mint_sum += amount
                 idx = m - w.act
                 leak = amount * P.reward_share * (w.h_vouchers / P.K) if idx <= P.reward_months else 0.0
                 net = amount - leak
                 farm_units_net += net
-                farm_cost += P.power_cost
+                farm_cost += P.power_cost + pow_month_cost
                 w.bal += net
-                if P.recurring:
-                    w.fresh.append((net, m - 1))  # квота периода m-1 (M4)
-                else:
-                    w.fresh.append((net, m + P.fresh_window))
+                if net > 0.0:
+                    if P.recurring:
+                        w.fresh.append((net, m - 1))  # квота периода m-1 (M4)
+                    else:
+                        w.fresh.append((net, m + P.fresh_window))
                 f_cnt += 1
                 f_bal_sum += w.bal
                 # блок 4: сгорание по метке — единица периода P непереводима
@@ -551,6 +719,8 @@ def simulate(P: Params, run_seed: int):
 
         active_h = sum(1 for w in wallets if w.kind == "h" and w.act is not None)
         active_f = sum(1 for w in wallets if w.kind == "f" and w.act is not None)
+        blocked_h = sum(1 for w in wallets if w.kind == "h" and w.blocked)
+        blocked_f = sum(1 for w in wallets if w.kind == "f" and w.blocked)
         revenue_units = farm_sold * (1 - P.sell_fee)
         breakeven = farm_cost / revenue_units if revenue_units > 0 else float("nan")
         hcost_med = statistics.median(h_cost.values()) if h_cost else 0.0
@@ -577,6 +747,12 @@ def simulate(P: Params, run_seed: int):
             "farm_dead_units": farm_dead,
             "honest_used_units": honest_used,
             "honest_dead_units": honest_dead,
+            "honest_mint_units": h_mint_sum,
+            "farm_mint_units": f_mint_sum,
+            "honest_minting": n_h,
+            "farm_minting": n_f,
+            "honest_blocked": blocked_h,
+            "farm_blocked": blocked_f,
         })
     return rows
 
@@ -1057,6 +1233,139 @@ def block4(runs: int, out: str, group_filter=None):
     print(f"\nCSV сохранены в: {out}")
 
 
+def a9_scenarios(base: Params):
+    """Сценарии темы A9 (пересчёт раздела 7.7 под фактические параметры
+    платформы, tnp main): стоимость устройства $200 (README) и
+    чувствительность $120/$300; кошельков на устройство (1:1 после A1,
+    2/4 — обход через профили Android или factory reset); стоимость PoW
+    из фактических таргетов; окно челленджа mint («после фикса A» против
+    «как в коде»). База 7.7: K=3, слоты 3/5/10, посев 100, ферма
+    20 устр./мес., 60 мес.
+    """
+    def a9(**kw):
+        d = dict(device_cost=DEVICE_COST_PUBLIC, wallets_per_device=1,
+                 bypass_cost_per_wallet=0.0, pow_actual=False,
+                 mint_window_mode="fixed")
+        d.update(kw)
+        return replace(base, **d)
+
+    g = {}
+    # 0) воспроизведение 7.7 как в коде модели ($120 за устройство)
+    g["0 база 7.7 (как в коде: $120)"] = replace(base, device_cost=120.0)
+    # 1) база 7.7 на публичном $200 (README)
+    g["1 база 7.7 на $200 (README)"] = a9()
+    # 2) чувствительность стоимости устройства
+    g["2 устройство $120"] = a9(device_cost=120.0)
+    g["2 устройство $300"] = a9(device_cost=300.0)
+    # 3) кошельков на устройство: обход A1 (профили дешевле reset)
+    g["3 2 кош./устр. (профили Android)"] = a9(
+        wallets_per_device=2, bypass_cost_per_wallet=BYPASS_PROFILE_USD)
+    g["3 4 кош./устр. (профили Android)"] = a9(
+        wallets_per_device=4, bypass_cost_per_wallet=BYPASS_PROFILE_USD)
+    g["3 2 кош./устр. (factory reset)"] = a9(
+        wallets_per_device=2, bypass_cost_per_wallet=BYPASS_RESET_USD)
+    g["3 4 кош./устр. (factory reset)"] = a9(
+        wallets_per_device=4, bypass_cost_per_wallet=BYPASS_RESET_USD)
+    # 4) PoW по фактическим таргетам (2^56 / 2^40, Argon2id 32 МиБ × 1)
+    g["4 PoW по факту (2^56/2^40)"] = a9(pow_actual=True)
+    # 5) окно челленджа mint: после фикса A против кода сейчас
+    g["5 окно mint: после фикса A (0%)"] = a9(mint_window_mode="fixed")
+    g["5 окно mint: как в коде (ферма авто)"] = a9(
+        mint_window_mode="code", farm_window_automation=1.0)
+    g["5 окно mint: как в коде (ферма страдает)"] = a9(
+        mint_window_mode="code", farm_window_automation=0.0)
+    # 6) всё вместе: $200 + обход + PoW + окно как в коде
+    g["6 всё: $200 + 2 кош./устр. + PoW + окно (авто)"] = a9(
+        wallets_per_device=2, bypass_cost_per_wallet=BYPASS_PROFILE_USD,
+        pow_actual=True, mint_window_mode="code", farm_window_automation=1.0)
+    g["6 всё: $200 + 4 кош./устр. + PoW + окно (авто)"] = a9(
+        wallets_per_device=4, bypass_cost_per_wallet=BYPASS_PROFILE_USD,
+        pow_actual=True, mint_window_mode="code", farm_window_automation=1.0)
+    return g
+
+
+def a9(runs: int, out: str, group_filter=None, seed=None):
+    """Тема A9: пересчёт раздела 7.7 под фактические параметры платформы.
+
+    seed=None — прогоны 1..runs (сводка — среднее); seed=N — один прогон
+    (воспроизведение байт-в-байт, файлы с суффиксом _seedN).
+    """
+    groups = a9_scenarios(Params())
+    if group_filter:
+        groups = {k: v for k, v in groups.items() if group_filter.lower() in k.lower()}
+    os.makedirs(out, exist_ok=True)
+    seeds = [seed] if seed is not None else list(range(1, runs + 1))
+    suffix = f"_seed{seed}" if seed is not None else ""
+    print(f"Тема A9: {len(seeds)} прогонов на сценарий (seed {seeds[0]}..{seeds[-1]}); "
+          f"порог пересечения ${CROSS_PRICE}")
+    print(f"{'сценарий':44s} | {'доля m60':>8s} | {'пик (мес)':>11s} | {'$ m60':>7s} | "
+          f"{'перес.':>6s} | {'окуп.':>5s} | {'$/кош.':>8s} | {'дох.честн':>9s}")
+    summary = []
+    for name, P in groups.items():
+        runs_rows = [simulate(P, s) for s in seeds]
+        mean_rows = aggregate(runs_rows)
+        m60 = mean_rows[59]
+        peak = max(mean_rows, key=lambda r: r["farm_share"])
+        crosses = [crossing_month(r) for r in runs_rows]
+        cross_med = statistics.median([c if c is not None else P.months + 1 for c in crosses])
+        pays = [payback_month(r) for r in runs_rows]
+        pay_med = statistics.median([p if p is not None else P.months + 1 for p in pays])
+        h_ratio = (m60["honest_mint_units"] / (m60["honest_minting"] * P.base_mint)
+                   if m60["honest_minting"] else 0.0)
+        f_ratio = (m60["farm_mint_units"] / (m60["farm_minting"] * P.base_mint)
+                   if m60["farm_minting"] else 0.0)
+        cost_w = (m60["farm_cost_usd"] / m60["farm_active"]
+                  if m60["farm_active"] else float("nan"))
+        # потеря дохода за весь горизонт: выпущено / сколько было бы без потерь
+        h_cap = sum(r["honest_minting"] for r in mean_rows) * P.base_mint
+        f_cap = sum(r["farm_minting"] for r in mean_rows) * P.base_mint
+        h_tot = (sum(r["honest_mint_units"] for r in mean_rows) / h_cap) if h_cap else 0.0
+        f_tot = (sum(r["farm_mint_units"] for r in mean_rows) / f_cap) if f_cap else 0.0
+        print(f"{name:44s} | {100*m60['farm_share']:7.1f}% | "
+              f"{100*peak['farm_share']:5.1f}% (m{peak['month']:>2}) | "
+              f"{m60['breakeven_price']:7.4f} | {cross_med:6.0f} | {pay_med:5.0f} | "
+              f"{cost_w:8.2f} | {100*h_ratio:8.1f}%")
+        summary.append({
+            "scenario": name,
+            "device_cost": P.device_cost,
+            "wallets_per_device": P.wallets_per_device,
+            "bypass_cost_per_wallet": P.bypass_cost_per_wallet,
+            "pow_actual": P.pow_actual,
+            "mint_window_mode": P.mint_window_mode,
+            "farm_window_automation": P.farm_window_automation,
+            "farm_share_m60": 100 * m60["farm_share"],
+            "farm_share_peak": 100 * peak["farm_share"],
+            "farm_share_peak_month": peak["month"],
+            "breakeven_m60": m60["breakeven_price"],
+            "crossing_001_median": cross_med,
+            "payback_month_median": pay_med,
+            "farm_cost_m60": m60["farm_cost_usd"],
+            "cost_per_wallet_m60": cost_w,
+            "farm_active_m60": m60["farm_active"],
+            "honest_active_m60": m60["honest_active"],
+            "farm_units_net_m60": m60["farm_units_net"],
+            "honest_mint_ratio_m60": h_ratio,
+            "farm_mint_ratio_m60": f_ratio,
+            "honest_income_total_ratio": h_tot,
+            "farm_income_total_ratio": f_tot,
+            "honest_blocked_m60": m60["honest_blocked"],
+            "farm_blocked_m60": m60["farm_blocked"],
+        })
+        fname = os.path.join(out, "a9_" + name.replace(" ", "_").replace("/", "-")
+                             .replace(":", "").replace("%", "proc").replace(",", "")
+                             + suffix + ".csv")
+        with open(fname, "w", newline="", encoding="utf-8") as f:
+            wcsv = csv.DictWriter(f, fieldnames=list(mean_rows[0].keys()))
+            wcsv.writeheader()
+            wcsv.writerows(mean_rows)
+    sname = os.path.join(out, f"a9_summary{suffix}.csv")
+    with open(sname, "w", newline="", encoding="utf-8") as f:
+        wcsv = csv.DictWriter(f, fieldnames=list(summary[0].keys()))
+        wcsv.writeheader()
+        wcsv.writerows(summary)
+    print(f"\nCSV сохранены в: {out}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--runs", type=int, default=8, help="число прогонов Монте-Карло на сценарий")
@@ -1067,12 +1376,20 @@ def main():
     ap.add_argument("--block3", action="store_true", help="блок 3: адаптивная комиссия, демередж, мораторий (№44)")
     ap.add_argument("--block3-params", action="store_true", help="контрольный прогон цели 15%/окно (11.4)")
     ap.add_argument("--block4", action="store_true", help="блок 4: recurring-квоты профиля 8 (v9.10)")
+    ap.add_argument("--a9", action="store_true",
+                    help="тема A9: фактические параметры платформы (tnp main)")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="один seed (воспроизведение прогона; по умолчанию 1..--runs)")
     ap.add_argument("--group", default=None, help="фильтр сценариев stage12 по подстроке имени")
     args = ap.parse_args()
 
     if args.regression:
         ok = regression(args.runs)
         raise SystemExit(0 if ok else 1)
+
+    if args.a9:
+        a9(args.runs, args.out, args.group, args.seed)
+        return
 
     if args.stage12:
         stage12(args.runs, args.out, args.group)

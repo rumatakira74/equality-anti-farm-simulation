@@ -37,9 +37,16 @@
 
 Тема A9 (пересчёт раздела 7.7 под фактические параметры платформы; по умолчанию
 ВЫКЛЮЧЕНО, база 1.1 не меняется):
+  * стоимость устройства: канон — $120 (решение владельца по S-01:
+    консервативно для вывода платформы — даже при дешёвом устройстве ферма
+    не окупается, вывод robust); $200 — только в сетке чувствительности;
   * кошельков на устройство: 1:1 после фикса A1 (SPKI листа аттестации =
-    AttestedPublicKey) — дефолт; 2/4 — обход через профили пользователя Android
-    или factory reset, с издержками обхода на кошелёк;
+    AttestedPublicKey) — дефолт; допущение «одно устройство = один кошелёк»
+    протоколом не проверяется — wallets_per_device {1, 2, 4} снижает
+    эффективную стоимость кошелька (device_cost / wallets_per_device);
+    сетка чувствительности device_cost {120, 200} × wallets_per_device
+    {1, 2, 4}; 2/4 с издержками — обход через профили пользователя Android
+    или factory reset;
   * стоимость PoW из фактических таргетов tnp main: TargetLight 2^40 -> 2^24
     итераций SHA-256, TargetHard 2^56 -> 256 итераций Argon2id 32 МиБ × 1;
     время и электричество на кошелёк рядом с устройством и поручительством;
@@ -57,7 +64,8 @@ R, посевной круг) зафиксированы и не меняютс�
 выходит в ноль. Вторая метрика — потери медианного честного активного участника
 (демередж + комиссия) в долях его месячного выпуска.
 
-Запуск:  python3 farm_model.py                 # сценарии 1.1 (без изменений)
+Запуск (numpy обязателен — единственный путь ГПЧ, см. requirements.txt):
+         python3 farm_model.py                 # сценарии 1.1 (без изменений)
          python3 farm_model.py --regression    # проверка воспроизведения базы 1.1
          python3 farm_model.py --stage12       # свеепы этапа 1.2
          python3 farm_model.py --block3       # блок 3: адаптивная комиссия (№44)
@@ -70,38 +78,41 @@ R, посевной круг) зафиксированы и не меняютс�
 """
 import argparse
 import csv
-import math
 import os
 import random
 import statistics
 import warnings
 from dataclasses import dataclass, replace
 
-try:
-    import numpy as np
-except ImportError:  # патч без numpy: точная выборка Пуассона (разбиение λ по 30 + Кнут)
-    np = None
+import numpy as np  # единственный путь ГПЧ (S-08: fallback без numpy удалён)
 
 warnings.filterwarnings("ignore", message="Mean of empty slice")
 
 CROSS_PRICE = 0.01  # порог безубыточной цены для метрики «месяц пересечения», $
 
-# Тема A9: публичное значение стоимости устройства (README, раздел 7.7) и
-# издержки обходов «кошельков на устройство» на кошелёк (время оператора,
-# риск, повторные расходы входа). База 1.1 в коде держала $120 — историческое
-# значение оставлено дефолтом Params(), чтобы канарейка 1.1 проходила;
-# сценарии A9 берут публичные $200.
-DEVICE_COST_PUBLIC = 200.0
+# Стоимость устройства (S-01, решение владельца): каноническое значение —
+# $120, консервативно для вывода платформы (даже при дешёвом устройстве
+# ферма не окупается — вывод robust); $200 — только в сетке чувствительности.
+# Допущение «одно устройство = один кошелёк» протоколом не проверяется:
+# wallets_per_device снижает эффективную стоимость кошелька
+# (device_cost / wallets_per_device), сетка значений {1, 2, 4} — в сценариях A9.
+DEVICE_COST_CANONICAL = 120.0
+DEVICE_COST_SENSITIVITY = 200.0  # бывшее «публичное» значение (README до S-01)
 BYPASS_PROFILE_USD = 2.0   # профиль пользователя Android: ~10 мин настройки
                            # ($10/ч) + риск блокировки профиля
 BYPASS_RESET_USD = 25.0    # factory reset: ~20–30 мин + потеря данных и
                            # возраста прежнего кошелька (ключ в Keystore стирается)
 
-# Опубликованные средние базы 1.1 (KNOWLEDGE.md 7.7; 8 прогонов): месяц -> (честные, ферма, доля %)
-PUBLISHED_BASE = {12: (232, 38, 13.9), 24: (568, 334, 36.8), 60: (8348, 1140, 12.1)}
-# Допуски регрессии: измеренный шум Монте-Карло 8-прогоновых средних по 4 блокам сидов
-# (см. REPORT.md): месяц -> (относит. допуск честных, абс. допуск фермы, допуск доли п.п.)
-REGRESSION_TOL = {12: (0.06, 12.0, 3.0), 24: (0.10, 40.0, 4.0), 60: (0.05, 60.0, 1.5)}
+# Канонические средние базы 1.1 (numpy-путь, seeds 1..8; S-08: единый путь
+# ГПЧ — опубликованные до S-08 значения 232/38/13.9 … получены fallback-путём
+# без numpy и заменены каноном numpy-пути).
+PUBLISHED_BASE = {12: (236, 31, 11.5), 24: (577, 306, 34.3), 60: (8481, 1140, 12.0)}
+# Допуски регрессии = 3σ измеренного шума Монте-Карло 8-прогоновых средних
+# (12 непересекающихся блоков сидов по 8 прогонов, numpy-путь, 04.11.2026;
+# SD: честные 3.5/9.5/156, ферма 2.4/21.3/0.1, доля 0.82/1.63/0.20 п.п.
+# для m12/m24/m60; до S-08 допуски калибровались по fallback-пути).
+# месяц -> (относит. допуск честных, абс. допуск фермы, допуск доли п.п.)
+REGRESSION_TOL = {12: (0.05, 8.0, 2.5), 24: (0.05, 65.0, 5.0), 60: (0.06, 1.0, 0.7)}
 
 
 @dataclass(frozen=True)
@@ -244,33 +255,6 @@ class W:
         self.blocked = False
 
 
-def _poisson_fallback(rnd, lam):
-    """Точная выборка Пуассона без numpy: разбиение λ по 30 + алгоритм Кнута."""
-    if lam <= 0:
-        return 0
-    k = 0
-    full = int(lam // 30)
-    rem = lam - 30.0 * full
-    for _ in range(full):
-        L = math.exp(-30.0)
-        p = 1.0
-        while True:
-            p *= rnd.random()
-            k += 1
-            if p <= L:
-                break
-        k -= 1
-    L = math.exp(-rem)
-    p = 1.0
-    while True:
-        p *= rnd.random()
-        k += 1
-        if p <= L:
-            break
-    return k - 1
-
-
-
 def unit_transferable(mark, m, P):
     """Переводимость единицы в месяце m: recurring — пока m <= mark + grace
     (mark — метка периода единицы; передачей не обновляется); std — с
@@ -372,12 +356,12 @@ def payback_month(rows):
 
 
 def simulate(P: Params, run_seed: int):
-    if np is not None:
-        rng = np.random.default_rng(run_seed)
-        poisson = rng.poisson
-    else:
-        prnd = random.Random(run_seed * 7919 + 1)
-        poisson = lambda lam: _poisson_fallback(prnd, lam)
+    # единственный путь ГПЧ (S-08): Пуассон — numpy Generator; rnd/er/wr —
+    # random.Random с независимыми сидами (динамика роста / экономика честных /
+    # окно челленджа mint). Поток Generator привязан к версии numpy —
+    # canonical-прогоны воспроизводимы байт-в-байт только с ней (requirements.txt).
+    rng = np.random.default_rng(run_seed)
+    poisson = rng.poisson
     rnd = random.Random(run_seed)
     # отдельный поток для экономики честных (не трогает поток динамики роста)
     er = random.Random(run_seed * 7919 + 1)
@@ -759,21 +743,7 @@ def simulate(P: Params, run_seed: int):
 
 def run_many(P: Params, runs: int):
     all_rows = [simulate(P, seed) for seed in range(1, runs + 1)]
-    keys = all_rows[0][0].keys()
-    out = []
-    for t in range(P.months):
-        row = {}
-        for k in keys:
-            vals = [r[t][k] for r in all_rows]
-            if k == "month":
-                row[k] = vals[0]
-            elif np is not None:
-                row[k] = float(np.nanmean(vals))
-            else:
-                vals2 = [v for v in vals if not (isinstance(v, float) and math.isnan(v))]
-                row[k] = float(sum(vals2) / len(vals2)) if vals2 else float("nan")
-        out.append(row)
-    return out
+    return aggregate(all_rows)
 
 
 def aggregate(all_rows):
@@ -786,11 +756,8 @@ def aggregate(all_rows):
             vals = [r[t][k] for r in all_rows]
             if k == "month":
                 row[k] = vals[0]
-            elif np is not None:
-                row[k] = float(np.nanmean(vals))
             else:
-                vals2 = [v for v in vals if not (isinstance(v, float) and math.isnan(v))]
-                row[k] = float(sum(vals2) / len(vals2)) if vals2 else float("nan")
+                row[k] = float(np.nanmean(vals))
         out.append(row)
     return out
 
@@ -820,7 +787,7 @@ def regression(runs: int):
         print(f"  месяц {mo:>2}: {h:7.0f}/{f:6.0f}/{s:4.1f}%  (опубликовано {h0}/{f0}/{s0}%; "
               f"допуск ±{100*th:g}%/±{tf:g}/±{ts:g} п.п.) -> {'OK' if okh and okf and oks else 'FAIL'}")
     cross = crossing_month(res)
-    print(f"  пересечение ${CROSS_PRICE}: месяц {cross} (в 7.7 — 38-й)")
+    print(f"  пересечение ${CROSS_PRICE}: месяц {cross} (канон numpy-пути — 39-й)")
     print("РЕГРЕССИЯ:", "ПРОЙДЕНА" if ok else "ПРОВАЛЕНА")
     return ok
 
@@ -1259,29 +1226,37 @@ def block4(runs: int, out: str, group_filter=None):
 
 def a9_scenarios(base: Params):
     """Сценарии темы A9 (пересчёт раздела 7.7 под фактические параметры
-    платформы, tnp main): стоимость устройства $200 (README) и
-    чувствительность $120/$300; кошельков на устройство (1:1 после A1,
-    2/4 — обход через профили Android или factory reset); стоимость PoW
-    из фактических таргетов; окно челленджа mint («после фикса A» против
-    «как в коде»). База 7.7: K=3, слоты 3/5/10, посев 100, ферма
-    20 устр./мес., 60 мес.
+    платформы, tnp main). Стоимость устройства: канон — $120 (решение
+    владельца по S-01: консервативно для вывода платформы — даже при
+    дешёвом устройстве ферма не окупается); сетка чувствительности
+    device_cost {120, 200} × wallets_per_device {1, 2, 4} — несколько
+    кошельков на устройстве снижают эффективную стоимость кошелька
+    (device_cost / wallets_per_device); допущение «одно устройство =
+    один кошелёк» протоколом не проверяется. Сетка берётся без издержек
+    обхода — изолирует два параметра и консервативно удешевляет кошелёк
+    фермы; издержки обхода (профили Android / factory reset) — в сценариях 3.
+    Далее: $300 — точка вне сетки; стоимость PoW из фактических таргетов;
+    окно челленджа mint («после фикса A» против «как в коде»). База 7.7:
+    K=3, слоты 3/5/10, посев 100, ферма 20 устр./мес., 60 мес.
     """
     def a9(**kw):
-        d = dict(device_cost=DEVICE_COST_PUBLIC, wallets_per_device=1,
+        d = dict(device_cost=DEVICE_COST_CANONICAL, wallets_per_device=1,
                  bypass_cost_per_wallet=0.0, pow_actual=False,
                  mint_window_mode="fixed")
         d.update(kw)
         return replace(base, **d)
 
     g = {}
-    # 0) воспроизведение 7.7 как в коде модели ($120 за устройство)
-    g["0 база 7.7 (как в коде: $120)"] = replace(base, device_cost=120.0)
-    # 1) база 7.7 на публичном $200 (README)
-    g["1 база 7.7 на $200 (README)"] = a9()
-    # 2) чувствительность стоимости устройства
-    g["2 устройство $120"] = a9(device_cost=120.0)
+    # 0) каноническая база 7.7 ($120, 1 кошелёк на устройство)
+    g["0 база 7.7 (канон: $120, 1 кош./устр.)"] = a9()
+    # 1) сетка чувствительности: device_cost {120, 200} × wallets_per_device {1, 2, 4}
+    for cost in (DEVICE_COST_CANONICAL, DEVICE_COST_SENSITIVITY):
+        for wpd in (1, 2, 4):
+            g[f"1 сетка: ${cost:g}, {wpd} кош./устр."] = a9(
+                device_cost=cost, wallets_per_device=wpd)
+    # 2) точка вне сетки: устройство $300
     g["2 устройство $300"] = a9(device_cost=300.0)
-    # 3) кошельков на устройство: обход A1 (профили дешевле reset)
+    # 3) кошельков на устройство с издержками обхода A1 (профили дешевле reset)
     g["3 2 кош./устр. (профили Android)"] = a9(
         wallets_per_device=2, bypass_cost_per_wallet=BYPASS_PROFILE_USD)
     g["3 4 кош./устр. (профили Android)"] = a9(
@@ -1298,7 +1273,7 @@ def a9_scenarios(base: Params):
         mint_window_mode="code", farm_window_automation=1.0)
     g["5 окно mint: как в коде (ферма страдает)"] = a9(
         mint_window_mode="code", farm_window_automation=0.0)
-    # 6) всё вместе: $200 + обход + PoW + окно как в коде
+    # 6) всё вместе: $200 (сетка) + обход + PoW + окно как в коде
     g["6 всё: $200 + 2 кош./устр. + PoW + окно (авто)"] = a9(
         wallets_per_device=2, bypass_cost_per_wallet=BYPASS_PROFILE_USD,
         pow_actual=True, mint_window_mode="code", farm_window_automation=1.0)

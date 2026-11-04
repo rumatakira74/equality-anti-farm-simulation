@@ -14,8 +14,8 @@ from farm_model import (Params, W, simulate, fee_rate_step,  # noqa: E402
                         unit_transferable, block3_scenarios, block3_params_scenarios,
                         block4_scenarios, pow_iterations, pow_cost_per_wallet,
                         pow_hardware_advantage, mint_window_amount, a9_scenarios,
-                        payback_month, DEVICE_COST_PUBLIC, BYPASS_PROFILE_USD,
-                        BYPASS_RESET_USD)
+                        payback_month, DEVICE_COST_CANONICAL, DEVICE_COST_SENSITIVITY,
+                        BYPASS_PROFILE_USD, BYPASS_RESET_USD)
 
 
 class TestFeeRateStep(unittest.TestCase):
@@ -161,6 +161,20 @@ class TestBaseCanary(unittest.TestCase):
         self.assertEqual(rows[59]["farm_active"], 1139)
         self.assertAlmostEqual(rows[59]["breakeven_price"], 0.005317, places=5)
         self.assertAlmostEqual(rows[37]["breakeven_price"], 0.010204, places=5)
+
+
+class TestSingleRngPath(unittest.TestCase):
+    """S-08: единственный путь ГПЧ — numpy (Generator, привязан к версии
+    numpy в requirements.txt); fallback без numpy удалён."""
+
+    def test_numpy_is_mandatory(self):
+        import numpy
+        import farm_model
+        self.assertIs(farm_model.np, numpy)
+
+    def test_no_fallback_path(self):
+        import farm_model
+        self.assertFalse(hasattr(farm_model, "_poisson_fallback"))
 
 
 class TestBlock3Scenarios(unittest.TestCase):
@@ -343,7 +357,8 @@ class TestA9PlatformFacts(unittest.TestCase):
 
 
 class TestA9DeviceCost(unittest.TestCase):
-    """A9 п.3: стоимость устройства $200 (README) и чувствительность."""
+    """A9, S-01: каноническая стоимость устройства $120 (решение владельца),
+    сетка чувствительности device_cost {120, 200} × wallets_per_device {1, 2, 4}."""
 
     def test_device_cost_scales_breakeven(self):
         # стоимость устройства не влияет на динамику (доля фермы), только на $
@@ -358,10 +373,34 @@ class TestA9DeviceCost(unittest.TestCase):
         ratio = b300[59]["breakeven_price"] / b120[59]["breakeven_price"]
         self.assertTrue(2.2 < ratio < 2.6, ratio)
 
-    def test_public_value_is_200(self):
-        self.assertEqual(DEVICE_COST_PUBLIC, 200.0)
+    def test_canonical_is_120(self):
+        # решение владельца по S-01: канон $120 (даже при дешёвом устройстве
+        # ферма не окупается — вывод robust); $200 — только в сетке
+        self.assertEqual(DEVICE_COST_CANONICAL, 120.0)
+        self.assertEqual(DEVICE_COST_SENSITIVITY, 200.0)
         g = a9_scenarios(Params())
-        self.assertEqual(g["1 база 7.7 на $200 (README)"].device_cost, 200.0)
+        self.assertEqual(g["0 база 7.7 (канон: $120, 1 кош./устр.)"].device_cost, 120.0)
+        self.assertEqual(g["1 сетка: $200, 1 кош./устр."].device_cost, 200.0)
+
+    def test_grid_covers_120_200_x_1_2_4(self):
+        # сетка чувствительности полная и без издержек обхода (изолирует два
+        # параметра; издержки обхода — в сценариях 3)
+        g = a9_scenarios(Params())
+        for cost in (120, 200):
+            for wpd in (1, 2, 4):
+                key = f"1 сетка: ${cost}, {wpd} кош./устр."
+                self.assertIn(key, g)
+                self.assertEqual(g[key].device_cost, float(cost), key)
+                self.assertEqual(g[key].wallets_per_device, wpd, key)
+                self.assertEqual(g[key].bypass_cost_per_wallet, 0.0, key)
+
+    def test_grid_ordering(self):
+        # сетка: дешевле устройство и больше кошельков на устройство ->
+        # ниже безубыточная цена (эффективная стоимость кошелька падает)
+        g = a9_scenarios(Params())
+        cheap = simulate(g["1 сетка: $200, 4 кош./устр."], 1)
+        dear = simulate(g["1 сетка: $120, 1 кош./устр."], 1)
+        self.assertLess(cheap[59]["breakeven_price"], dear[59]["breakeven_price"])
 
 
 class TestA9WalletsPerDevice(unittest.TestCase):
@@ -456,9 +495,10 @@ class TestA9Scenarios(unittest.TestCase):
 
     def test_scenarios_present(self):
         g = a9_scenarios(Params())
-        self.assertEqual(len(g), 14)
-        for name in ("0 база 7.7 (как в коде: $120)",
-                     "1 база 7.7 на $200 (README)",
+        self.assertEqual(len(g), 18)
+        for name in ("0 база 7.7 (канон: $120, 1 кош./устр.)",
+                     "1 сетка: $120, 1 кош./устр.",
+                     "1 сетка: $200, 4 кош./устр.",
                      "2 устройство $300",
                      "3 2 кош./устр. (профили Android)",
                      "3 4 кош./устр. (factory reset)",
@@ -468,11 +508,10 @@ class TestA9Scenarios(unittest.TestCase):
                      "5 окно mint: как в коде (ферма страдает)",
                      "6 всё: $200 + 2 кош./устр. + PoW + окно (авто)"):
             self.assertIn(name, g)
-        self.assertEqual(g["0 база 7.7 (как в коде: $120)"].device_cost, 120.0)
-        self.assertEqual(g["1 база 7.7 на $200 (README)"].device_cost, 200.0)
+        self.assertEqual(g["0 база 7.7 (канон: $120, 1 кош./устр.)"].device_cost, 120.0)
 
     def test_base_defaults_untouched(self):
-        # дефолт Params() — историческая база 1.1 ($120), новые режимы выключены
+        # дефолт Params() — канон базы 1.1 ($120, S-01), новые режимы выключены
         P = Params()
         self.assertEqual(P.device_cost, 120.0)
         self.assertEqual(P.wallets_per_device, 1)

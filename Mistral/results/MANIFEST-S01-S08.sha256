@@ -1,0 +1,120 @@
+# Манифест регенерации канонических прогонов (тема fix-sim-s01-s08, закрытие S-08)
+# Дата: 2026-11-04; окружение: Python 3.13.16, numpy 2.5.3, Linux x86_64
+# (единое окружение для всех канонических артефактов — S-08)
+# Код: Mistral/farm_model.py @ fix-sim-s01-s08 ad3892f; путь ГПЧ — numpy (fallback удалён)
+# Seeds 1..8 (средние Монте-Карло); --regression воспроизводит канон
+# 236/31/11.5% — 577/306/34.3% — 8481/1140/12.0%, пересечение $0.01 — 39-й мес., пик 38.6% на 28-м
+#
+# Канонические артефакты (регенерированы этим окружением):
+#   Mistral/results/base/ — база 1.1, 19 CSV (28 колонок, numpy-путь);
+#   Mistral/results/b4_*.csv — блок 4, 21 CSV (пересхема 22 -> 28 колонок;
+#   значения общих колонок идентичны прежним, динамика не изменилась);
+#   Mistral/results/a9_*.csv — тема A9: канон $120 (S-01), сетка
+#   device_cost {120,200} x wallets_per_device {1,2,4}, 18 CSV + summary;
+#   манифесты a9 (полный набор и seeds 1..8) перезаписаны.
+# Проверены в этом окружении (динамика байт-в-байт по общим колонкам,
+# сводки идентичны; сами CSV остались в старой 19-колоночной схеме —
+# вне мандата не регенерировались): s12_*, b3_*, b3p_*.
+# Архивные каталоги исторических моделей (не регенерируются):
+#   "Claude Sonnet 3.6/", "Mistral GLM 5.3/" — SHA-256 на момент фиксации.
+
+# --- канонические артефакты ---
+29080c7636f9071f8bb79c3c4bcc952d298d3f085c47257a8c0b98307bf168a4  Mistral/results/base/K=2,_слоты_3-5-10.csv
+64f218d18a3320f1db1e00a6689a7eb8246361f15db6344b08c6bac5b17c806f  Mistral/results/base/K=4,_слоты_3-5-10.csv
+995b811e2e52cf47acf9f57753aa7519e0aec9f5b8004b83d6adc6d1ea15cf2b  Mistral/results/base/K=5,_слоты_3-5-10.csv
+9fa8274ac5477c434b299999fceb357d89d9e37e6e17b8ac04d9f1d68cda7b4a  Mistral/results/base/база_K=3,_слоты_3-5-10.csv
+686c424583b6c5baae496a9b7b1ba38cc684f8a1d365ad36dd927122d6c3c197  Mistral/results/base/посев_1000_кошельков.csv
+9fa8274ac5477c434b299999fceb357d89d9e37e6e17b8ac04d9f1d68cda7b4a  Mistral/results/base/посев_100_кошельков.csv
+42f3670b84c0b4340be01996599111d6796814722b5c9ae30a2e8a40ba98caca  Mistral/results/base/посев_300_кошельков.csv
+eeb6839c8ce8aef88f68f38909ff7776ace95a055d66ec4024e3a998a4fd5613  Mistral/results/base/посев_50_кошельков.csv
+0c12f2043f01e2aebc42a93bad07be7bb18017bac04f81b9b85a5276c6953d0a  Mistral/results/base/проникновение_0-мес.csv
+8c5d4baa314b5d922d3fc4c578328625204b3811616d4fca3f2465c38acb29ba  Mistral/results/base/проникновение_0.5-мес.csv
+9fa8274ac5477c434b299999fceb357d89d9e37e6e17b8ac04d9f1d68cda7b4a  Mistral/results/base/проникновение_2-мес.csv
+74299f4fcdbd94f7169ac46ec5d1878fbd10f7a2b5332875ffe942d1ce79d71a  Mistral/results/base/проникновение_20-мес.csv
+37e93216a00c95d858092a3fb6628f7cdcc711918705dd830b26b6f9e433520d  Mistral/results/base/проникновение_8-мес.csv
+e21d758e2820a6ee8a1de872f1059329d8d6c02c3a31998ef79ba3199b13a9fa  Mistral/results/base/узко_K=3,_слоты_2-2-10.csv
+9c02844144507b76f91b607f0c6e26a73566f6d18e6c3fe016ab0ba38fc36f03  Mistral/results/base/ферма_100_устройств-мес.csv
+9fa8274ac5477c434b299999fceb357d89d9e37e6e17b8ac04d9f1d68cda7b4a  Mistral/results/base/ферма_20_устройств-мес.csv
+7079b2b36153cd2cf588cb86304e7371fbff216738b62df681ee8b05a63fbabe  Mistral/results/base/ферма_50_устройств-мес.csv
+7a8a8fd6e9fb49ab7932c95b5f93b33b1e9331ab2fad7d2f7afcaa79d47de929  Mistral/results/base/ферма_5_устройств-мес.csv
+927a38cd70499c132b0e8bab3190971219a0f5c4de0f689691decb467378f382  Mistral/results/base/щедро_K=3,_слоты_5-8-15.csv
+9fa8274ac5477c434b299999fceb357d89d9e37e6e17b8ac04d9f1d68cda7b4a  Mistral/results/a9_0_база_7.7_(канон_$120_1_кош.-устр.).csv
+9fa8274ac5477c434b299999fceb357d89d9e37e6e17b8ac04d9f1d68cda7b4a  Mistral/results/a9_1_сетка_$120_1_кош.-устр..csv
+9ac08d18558ff1096e4390c03857bff8439703101fa4ba068ec0c4cb416ec11e  Mistral/results/a9_1_сетка_$120_2_кош.-устр..csv
+2bac9fbf9ebbebbaf6f0fd441df4b9cb322a52054aefb3a9ae9aa44ccef05079  Mistral/results/a9_1_сетка_$120_4_кош.-устр..csv
+09ec304fa74e7f0d5099ef7a9cb099f70bd1919e4caa508a05683dee40a81957  Mistral/results/a9_1_сетка_$200_1_кош.-устр..csv
+579d6b5a4355a7499e8713656a38ae7ab19775928c1814e8f0bae4ca479188dd  Mistral/results/a9_1_сетка_$200_2_кош.-устр..csv
+aaee9b981a87ec5e89d2f0a3aa9251f3bf43e77dc79e36defc92f6aee5fb3ac1  Mistral/results/a9_1_сетка_$200_4_кош.-устр..csv
+7c0a27c172f22ed438863f12c3cce617d9eb82b1f92e25f3cdeae0c1c9707691  Mistral/results/a9_2_устройство_$300.csv
+a22bc9f5d0d43b6e930c32434fb5642eacafbb4603fa71ef02bd2dffc5e93d45  Mistral/results/a9_3_2_кош.-устр._(factory_reset).csv
+d1291574eb72fa786221e8c202cc5d1d6fa6880ba8092023d19d707184028ed2  Mistral/results/a9_3_2_кош.-устр._(профили_Android).csv
+9196814a1d4e225d56b91b338023a9998c660d99f8d61937537330947b93940b  Mistral/results/a9_3_4_кош.-устр._(factory_reset).csv
+ab76d0ac49d05c2b96ce82ff179f08ace0399aea70bf64f84f731170013f20fc  Mistral/results/a9_3_4_кош.-устр._(профили_Android).csv
+6f88ce92368a9223148c3e5aca0cc84b9a6f605f52ab2d7907b9c5eb64464298  Mistral/results/a9_4_PoW_по_факту_(2^56-2^40).csv
+6cd11bd23c053a6fcc18570fcf69d655d28e63cf51172799268107a9c742165c  Mistral/results/a9_5_окно_mint_как_в_коде_(ферма_авто).csv
+3ec0b58f585530c0b2ba8dfbe2c260cc5a8d1078c8de06a3bffa641b937254ba  Mistral/results/a9_5_окно_mint_как_в_коде_(ферма_страдает).csv
+9fa8274ac5477c434b299999fceb357d89d9e37e6e17b8ac04d9f1d68cda7b4a  Mistral/results/a9_5_окно_mint_после_фикса_A_(0proc).csv
+89561a0a46e981adce0c62270d1197d8f67af365ab977834158e21e2096e4225  Mistral/results/a9_6_всё_$200_+_2_кош.-устр._+_PoW_+_окно_(авто).csv
+9a6953413c55f594a406171be0663f4a2f345d4c46657a2d1ebb3f6ffa31c060  Mistral/results/a9_6_всё_$200_+_4_кош.-устр._+_PoW_+_окно_(авто).csv
+6000883273f3c8d35e48d509a8395e93ffb577c230971ab5ef51e6bc132565dc  Mistral/results/a9_manifest.sha256
+f4fb978d6a2a429fbe8ac904f0a6f3314a843a229a4299d3bf0b3e8aa18a0237  Mistral/results/a9_seed1.sha256
+52078f526fc012e5bfb591a32609016431d5c2ae6311e466959c031469115419  Mistral/results/a9_seed2.sha256
+de324c2c4d8e816261d0661ff53447fc44c5e4b5d46dc347270bddc01decf726  Mistral/results/a9_seed3.sha256
+af77cf95a1e330f5099c0c84e055e7be3555f5f38e214b051978822c80132dca  Mistral/results/a9_seed4.sha256
+b8778a5d931be87ebc18dc1d2c6f56a13fdc3cad7b81b622c61bd332f155c8c7  Mistral/results/a9_seed5.sha256
+44a4746507c78782bcb1d2c428e2b7299772d1d65799ce4a90a229e79a13c4ba  Mistral/results/a9_seed6.sha256
+839e7242e294d80d87dc5919ff6c67d049ea6f0e179357290d5ce5928c7a4d28  Mistral/results/a9_seed7.sha256
+4b2c8b4ef9f6805a681cfcb9934931031d33b1222e762c26306a56c1c550d5dc  Mistral/results/a9_seed8.sha256
+054d5cf6849579a6f36147328059fa6a6b35479ada5f6d465d573e29b02e57a9  Mistral/results/a9_summary.csv
+9fa8274ac5477c434b299999fceb357d89d9e37e6e17b8ac04d9f1d68cda7b4a  Mistral/results/b4_1_rec_(grace_1).csv
+9fa8274ac5477c434b299999fceb357d89d9e37e6e17b8ac04d9f1d68cda7b4a  Mistral/results/b4_1_std_(без_метки).csv
+ff0643bc4de102dcda58879b113bb68c068a9e0c025c252b62bf72f2e452d96f  Mistral/results/b4_2_rec_grace_0.csv
+9fa8274ac5477c434b299999fceb357d89d9e37e6e17b8ac04d9f1d68cda7b4a  Mistral/results/b4_2_rec_grace_1.csv
+9fa8274ac5477c434b299999fceb357d89d9e37e6e17b8ac04d9f1d68cda7b4a  Mistral/results/b4_2_rec_grace_2.csv
+5302c8d51b60e211b1206b4bd6f2ca287a2dcb01fe7eb2e5292cd271bd165419  Mistral/results/b4_3_rec_ликвидность_0.25.csv
+05553d7ba5346c90900f5becb79ae0b3e30ce6ad0aa2badd5d5f16624a008f52  Mistral/results/b4_3_rec_ликвидность_0.5.csv
+9fa8274ac5477c434b299999fceb357d89d9e37e6e17b8ac04d9f1d68cda7b4a  Mistral/results/b4_3_rec_ликвидность_1.csv
+76041051c9587e9dfab11eef11f4b92e756f13c0f9fcf7c528fc77ceb1cfbb8a  Mistral/results/b4_3_std_ликвидность_0.25.csv
+cdb0b4a6296e3d337809fa01458bd2ee3d5408a9438fd22d3edc46e72f1ee034  Mistral/results/b4_3_std_ликвидность_0.5.csv
+9fa8274ac5477c434b299999fceb357d89d9e37e6e17b8ac04d9f1d68cda7b4a  Mistral/results/b4_3_std_ликвидность_1.csv
+05553d7ba5346c90900f5becb79ae0b3e30ce6ad0aa2badd5d5f16624a008f52  Mistral/results/b4_4_rec_кольцо_peer-redeem_(=_удержание).csv
+9fa8274ac5477c434b299999fceb357d89d9e37e6e17b8ac04d9f1d68cda7b4a  Mistral/results/b4_4_rec_ферма_ежемесячный_слив.csv
+9bb678c177f94c946e02298119f1d3a2aad765e8ac3c84ef667e3daea71a3f77  Mistral/results/b4_4_rec_ферма_накопление_6_мес.csv
+775dc4cc5ffab8ee63be013f13bb0bad6a466161bfd3bd22b38eebbbe36c6e8c  Mistral/results/b4_4_std_ферма_накопление_6_мес.csv
+9fa8274ac5477c434b299999fceb357d89d9e37e6e17b8ac04d9f1d68cda7b4a  Mistral/results/b4_5_rec_мораторий_0_д.csv
+9fa8274ac5477c434b299999fceb357d89d9e37e6e17b8ac04d9f1d68cda7b4a  Mistral/results/b4_5_rec_мораторий_14_д.csv
+9fa8274ac5477c434b299999fceb357d89d9e37e6e17b8ac04d9f1d68cda7b4a  Mistral/results/b4_5_rec_мораторий_30_д.csv
+cbfbc6b52a56e8ee495a2a9ec11ab16539d743fe895e8e0832711057c681c736  Mistral/results/b4_6_rec_потребление_0.5.csv
+e4c0e4157ca84eb99ff61d235fce1ede5dcf81c8c4ffbfa036f8ea40b0e8d539  Mistral/results/b4_6_rec_потребление_0.75.csv
+1b06820ef1ad531c5e32340538e017e6253fc954a39fb3bb284e6a264004943a  Mistral/results/b4_6_rec_потребление_1.csv
+4bdac4c738388261d025e8e86bddfb3e41301839eb5c60691bd60b60c8686ed5  Mistral/results/block4_summary.csv
+
+# --- архив (исторические каталоги, не регенерируются) ---
+ab95fba0a86f7a8d767ba6a506a85aacfb9e8cc94b97c3162ca7d73d9830f003  Claude Sonnet 3.6/farm_model.py
+ad828c438f5d477de76bf991373fc2177ba5800cb3cc5f90ebacff0ddd425c0b  Claude Sonnet 3.6/infiltration.png
+6a231bc1c770a90f27723ba17002005f184f27e879056e97e375f53949a92c81  Claude Sonnet 3.6/scenarios.png
+af35f2d29caa90a66e9f97907b77b952f2de03b5661dcef63b4c3b255fd637c1  Claude Sonnet 3.6/seed_and_budget.png
+4c033483013c5aa51b96d2c8ad30efcae3f58d2d03f86acb536c7db581f1bbc0  Mistral GLM 5.3/K=2,_слоты_3-5-10.csv
+c65826d0ee2785269eaa66a6c42075206a67ec470eca5ea286312791ff4eb8c7  Mistral GLM 5.3/K=4,_слоты_3-5-10.csv
+7cbdcc4ceb3211707a41476daef5fe052e3456cba8c5c55dd99d0edce787e9d0  Mistral GLM 5.3/K=5,_слоты_3-5-10.csv
+3bffd947a9f29d97a9fe477ee942952f23667a07e94ed2b8a8726533f1372e39  Mistral GLM 5.3/README-ENG.md
+3d8663c291665c76052fd79cb2cedb721466bd88902e6aea06160876b2ec2ef9  Mistral GLM 5.3/README.md
+ad828c438f5d477de76bf991373fc2177ba5800cb3cc5f90ebacff0ddd425c0b  Mistral GLM 5.3/infiltration.png
+6a231bc1c770a90f27723ba17002005f184f27e879056e97e375f53949a92c81  Mistral GLM 5.3/scenarios.png
+af35f2d29caa90a66e9f97907b77b952f2de03b5661dcef63b4c3b255fd637c1  Mistral GLM 5.3/seed_and_budget.png
+293f44c59ff370347e2d4614f54b8e0dd5f8ca081debe21e64ef6ebcc314f276  Mistral GLM 5.3/база_K=3,_слоты_3-5-10.csv
+d64a8a20a3fb8b649efd53c118c03d10319802fece69b08394103f93e8745f66  Mistral GLM 5.3/посев_1000_кошельков.csv
+293f44c59ff370347e2d4614f54b8e0dd5f8ca081debe21e64ef6ebcc314f276  Mistral GLM 5.3/посев_100_кошельков.csv
+db488e11609d1d49ebe2269a28f4c523f49bc6f44d3b2c367f451a2481798380  Mistral GLM 5.3/посев_300_кошельков.csv
+c37dd412733f8093efed021af7d10868f5b8616c9028e36fa73733aec5e5a2d0  Mistral GLM 5.3/посев_50_кошельков.csv
+ba03c9c96182739625042c8140184729c0db11db1a2697ee80981319d4c906be  Mistral GLM 5.3/проникновение_0-мес.csv
+918bcd6fe92ba94d3137f65240f8934773bf75c76da39f306e640be5641efc34  Mistral GLM 5.3/проникновение_0.5-мес.csv
+293f44c59ff370347e2d4614f54b8e0dd5f8ca081debe21e64ef6ebcc314f276  Mistral GLM 5.3/проникновение_2-мес.csv
+af64fca4e9ff8f079163e2259fc94a7427597caf72198dd0e29f37b9b3413bc8  Mistral GLM 5.3/проникновение_20-мес.csv
+7fa0e1c46b4640c140fdecd062b00e1235d27b31c9d93593c3f3dc76738f9914  Mistral GLM 5.3/проникновение_8-мес.csv
+b10efcec75e2a5fe023bde9fdcbc65baeae5a5eedfafbe66061240f38a0864e6  Mistral GLM 5.3/узко_K=3,_слоты_2-2-10.csv
+e10497fe8c8a6e4d03578c5abf86030c7968163dcce483a493f67f2fc59ac4d8  Mistral GLM 5.3/ферма_100_устройств-мес.csv
+293f44c59ff370347e2d4614f54b8e0dd5f8ca081debe21e64ef6ebcc314f276  Mistral GLM 5.3/ферма_20_устройств-мес.csv
+cee06acb64011e865b6ab083fe1f237b749e616d6d68557362e7ce264cc89d6b  Mistral GLM 5.3/ферма_50_устройств-мес.csv
+3d45a51ad678c29ee84cb9bd2ac4f913ce2682c4a4a7efd5e5f7df9be8583da5  Mistral GLM 5.3/ферма_5_устройств-мес.csv
+62190df337334dabc32f39282af851551ab388d2c3f1feddc5601779a1b8727b  Mistral GLM 5.3/щедро_K=3,_слоты_5-8-15.csv

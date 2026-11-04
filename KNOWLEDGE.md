@@ -735,9 +735,3 @@ description: "Платформа сетей доверия — конструк�
 ---
 
 © 2026 Лапчинский Кирилл (Kirill Lapchinsky) · rumatakira74@gmail.com · Telegram @rumatakira · 18 октября 2026 г.
-
----
-
-## Файлы темы (служебное)
-
-- [Правила именования и хранения артефактов](naming-conventions.md) — план разработки всегда `development-plan`; в облаках всё кладётся в папку `mistral`, не в корень.

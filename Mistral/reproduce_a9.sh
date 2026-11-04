@@ -11,6 +11,14 @@
 # сверяет свежий прогон с манифестом и печатает OK либо diff.
 set -euo pipefail
 
+# numpy обязателен: путь Пуассона различается numpy/fallback — без numpy
+# те же seed дают другие байты CSV и сверка манифеста падает
+# (аудит z-ai EQ-06)
+if ! python3 -c "import numpy" >/dev/null 2>&1; then
+    echo "ОШИБКА: numpy не установлен — установите (см. README: uv pip install numpy)" >&2
+    exit 1
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 OUT="Mistral/results"

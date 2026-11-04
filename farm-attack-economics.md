@@ -1,3 +1,9 @@
+> **⚠️ Эта копия без ERRATUM (аудит z-ai, 04.11.2026).** Актуальная версия
+> записки с ERRATUM от 04.11.2026 —
+> `docs/farm-attack-economics.md` в
+> [equality-trust-networks](https://github.com/rumatakira74/equality-trust-networks).
+> Локальные уточнения PoW (число итераций) внесены только там.
+
 # Экономика фермерской атаки — интерпретация результатов симуляции
 
 Дополнение к разделу 7.7 KNOWLEDGE.md (v9.2). Основа: `equality-anti-farm-simulation`

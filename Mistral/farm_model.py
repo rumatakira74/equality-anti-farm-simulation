@@ -897,12 +897,19 @@ def stage12(runs: int, out: str, group_filter=None):
     groups = stage12_scenarios(base)
     if group_filter:
         groups = {k: v for k, v in groups.items() if group_filter.lower() in k.lower()}
+        if not groups:
+            # аудит z-ai EQ-01: пустой фильтр раньше падал IndexError на summary[0]
+            raise SystemExit(f"--group «{group_filter}»: сценариев не найдено")
     os.makedirs(out, exist_ok=True)
     print(f"Свеепы этапа 1.2: {runs} прогонов на сценарий; порог пересечения ${CROSS_PRICE}")
     hdr = (f"{'сценарий':58s} | {'доля ф. m60':>10s} | {'$ m38':>7s} | {'$ m60':>7s} | "
            f"{'перес. $0.01':>12s} | {'честные, % вып.':>14s} | {'сток фермы':>9s}")
     print(hdr)
     summary = []
+    if any(getattr(p, "months", 60) < 60 for p in groups.values()):
+        raise SystemExit(
+            "метрики m60/m38 (индексы 59/37) требуют months >= 60 "
+            "(аудит z-ai EQ-05)")
     for name, P in groups.items():
         runs_rows = [simulate(P, s) for s in range(1, runs + 1)]
         mean_rows = aggregate(runs_rows)
@@ -1067,6 +1074,10 @@ def _block3_run(groups, runs: int, out: str, prefix: str, summary_name: str, tit
            f"{'ставка m60':>9s} | {'ставка min-max':>13s} | {'честные %':>9s} | {'сток':>6s}")
     print(hdr)
     summary = []
+    if any(getattr(p, "months", 60) < 60 for p in groups.values()):
+        raise SystemExit(
+            "метрики m60/m38 (индексы 59/37) требуют months >= 60 "
+            "(аудит z-ai EQ-05)")
     for name, P in groups.items():
         runs_rows = [simulate(P, s) for s in range(1, runs + 1)]
         mean_rows = aggregate(runs_rows)
@@ -1111,6 +1122,9 @@ def block3(runs: int, out: str, group_filter=None):
     groups = block3_scenarios(Params())
     if group_filter:
         groups = {k: v for k, v in groups.items() if group_filter.lower() in k.lower()}
+        if not groups:
+            # аудит z-ai EQ-01: пустой фильтр раньше падал IndexError на summary[0]
+            raise SystemExit(f"--group «{group_filter}»: сценариев не найдено")
     _block3_run(groups, runs, out, "b3_", "block3_summary.csv", "Блок 3 (№44)")
 
 
@@ -1120,6 +1134,9 @@ def block3_params(runs: int, out: str, group_filter=None):
     groups = block3_params_scenarios(Params())
     if group_filter:
         groups = {k: v for k, v in groups.items() if group_filter.lower() in k.lower()}
+        if not groups:
+            # аудит z-ai EQ-01: пустой фильтр раньше падал IndexError на summary[0]
+            raise SystemExit(f"--group «{group_filter}»: сценариев не найдено")
     _block3_run(groups, runs, out, "b3p_", "block3_params_summary.csv",
                  "Блок 3-params (цель 15%/окно)")
 
@@ -1189,6 +1206,9 @@ def block4(runs: int, out: str, group_filter=None):
     groups = block4_scenarios(Params())
     if group_filter:
         groups = {k: v for k, v in groups.items() if group_filter.lower() in k.lower()}
+        if not groups:
+            # аудит z-ai EQ-01: пустой фильтр раньше падал IndexError на summary[0]
+            raise SystemExit(f"--group «{group_filter}»: сценариев не найдено")
     os.makedirs(out, exist_ok=True)
     print(f"Блок 4 (профиль 8, recurring): {runs} прогонов на сценарий; "
           f"порог пересечения ${CROSS_PRICE}")
@@ -1196,6 +1216,10 @@ def block4(runs: int, out: str, group_filter=None):
            f"{'сток ф.':>8s} | {'сгорело ф.':>10s} | {'потребл. честн.':>14s}")
     print(hdr)
     summary = []
+    if any(getattr(p, "months", 60) < 60 for p in groups.values()):
+        raise SystemExit(
+            "метрики m60/m38 (индексы 59/37) требуют months >= 60 "
+            "(аудит z-ai EQ-05)")
     for name, P in groups.items():
         runs_rows = [simulate(P, s) for s in range(1, runs + 1)]
         mean_rows = aggregate(runs_rows)
@@ -1293,6 +1317,9 @@ def a9(runs: int, out: str, group_filter=None, seed=None):
     groups = a9_scenarios(Params())
     if group_filter:
         groups = {k: v for k, v in groups.items() if group_filter.lower() in k.lower()}
+        if not groups:
+            # аудит z-ai EQ-01: пустой фильтр раньше падал IndexError на summary[0]
+            raise SystemExit(f"--group «{group_filter}»: сценариев не найдено")
     os.makedirs(out, exist_ok=True)
     seeds = [seed] if seed is not None else list(range(1, runs + 1))
     suffix = f"_seed{seed}" if seed is not None else ""
@@ -1301,6 +1328,10 @@ def a9(runs: int, out: str, group_filter=None, seed=None):
     print(f"{'сценарий':44s} | {'доля m60':>8s} | {'пик (мес)':>11s} | {'$ m60':>7s} | "
           f"{'перес.':>6s} | {'окуп.':>5s} | {'$/кош.':>8s} | {'дох.честн':>9s}")
     summary = []
+    if any(getattr(p, "months", 60) < 60 for p in groups.values()):
+        raise SystemExit(
+            "метрики m60/m38 (индексы 59/37) требуют months >= 60 "
+            "(аудит z-ai EQ-05)")
     for name, P in groups.items():
         runs_rows = [simulate(P, s) for s in seeds]
         mean_rows = aggregate(runs_rows)
@@ -1390,6 +1421,10 @@ def main():
     if args.a9:
         a9(args.runs, args.out, args.group, args.seed)
         return
+
+    if args.group and not (args.stage12 or args.block3 or args.block3_params or args.a9):
+        # аудит z-ai EQ-01: --group без режима группы молча делал «ничего»
+        raise SystemExit("--group требует --stage12 | --block3 | --block3_params | --a9")
 
     if args.stage12:
         stage12(args.runs, args.out, args.group)

@@ -223,9 +223,6 @@ class TestBlock3ParamsScenarios(unittest.TestCase):
         self.assertAlmostEqual(g["оборот 1"].honest_turnover, 1.0)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TestBlock4Recurring(unittest.TestCase):
     """Блок 4 (профиль 8, v9.10): сгорание по периодной метке — перевод
@@ -490,3 +487,7 @@ class TestA9Scenarios(unittest.TestCase):
         # окупаемость при $0,01 совпадает с пересечением безубыточной цены
         below = [r["month"] for r in rows if r["breakeven_price"] < 0.01]
         self.assertEqual(pb, min(below))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -7,7 +7,7 @@ Author: Kirill Lapchinsky (Лапчинский Кирилл), October 13, 2026 
 
 ## Repository structure
 
-- **Mistral/** — the final stage-1.2 model: `farm_model.py`, the report `REPORT.md` (regression against the published stage-1.1 figures, parameter sweeps, recommendations for the platform document) and `results/` — 49 sweep CSVs plus `stage12_summary.csv`.
+- **Mistral/** — the final stage-1.2 model: `farm_model.py`, the report `REPORT.md` (regression against the published stage-1.1 figures, parameter sweeps, recommendations for the platform document) and `results/` — 47 sweep CSVs plus `stage12_summary.csv`.
 - **Mistral GLM 5.3/** — stage-1.1 results: per-scenario CSVs (K=2–5, narrow/generous slots, seed circle 50–1000, farm budget 5–100 devices/mo., infiltration 0–20) and three charts.
 - **Claude Sonnet 3.6/** — the first version of the model and its charts (historical).
 - **KNOWLEDGE.md** — the platform document v9.3, the source of the model's rules.
@@ -22,7 +22,7 @@ uv venv && source .venv/bin/activate
 uv pip install numpy
 python farm_model.py --regression   # check against the published stage-1.1 figures
 python farm_model.py --stage12      # stage-1.2 mechanisms: demurrage, fee, window, P
-python farm_model.py --group        # run grouping
+python farm_model.py --stage12 --group SUBSTRING  # run grouping (stage12 scenario filter; without a group mode --group is ignored)
 ```
 
 Scenario parameters live in the `Params` class at the top of the file. To test your own value, add a line to the scenario dictionary inside `main()`, e.g.:

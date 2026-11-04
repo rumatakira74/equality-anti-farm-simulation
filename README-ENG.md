@@ -10,8 +10,8 @@ Author: Kirill Lapchinsky (Лапчинский Кирилл), October 13, 2026 
 - **Mistral/** — the final stage-1.2 model: `farm_model.py`, the report `REPORT.md`, `requirements.txt` (a pinned numpy — the single RNG path) and `results/` — the stage-1.1 canon (`base/`, 19 CSVs, the numpy path), the stage 1.2/3/4 sweeps, the A9 topic (the $120 canon, the device_cost × wallets_per_device sensitivity grid) and the SHA-256 manifests (`MANIFEST-S01-S08.sha256`, `a9_manifest.sha256`, per-seed — `a9_seed*.sha256`).
 - **Mistral GLM 5.3/** — the stage-1.1 results (a historical directory, an archive): per-scenario CSVs (K=2–5, narrow/generous slots, a seed circle of 50–1000, a farm budget of 5–100 devices/mo., infiltration 0–20) and three charts.
 - **Claude Sonnet 3.6/** — the first version of the model and its charts (historical).
-- **KNOWLEDGE.md** — the platform document v9.3, the source of the model's rules.
-- **farm-attack-economics.md** — farm-attack economics in plain language.
+- **KNOWLEDGE.md** — an outdated snapshot of the platform document v9.3: the content is removed; it links to the current version (`docs/KNOWLEDGE.md` v9.16 in equality-trust-networks).
+- **farm-attack-economics.md** / **farm-attack-economics-ENG.md** — outdated copies of the farm-attack economics note: they link to the current versions in equality-trust-networks.
 
 ## Running on your laptop
 

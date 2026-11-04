@@ -1,3 +1,10 @@
+> **⚠️ Outdated snapshot (the z-ai audit, November 4, 2026).** This file is a snapshot
+> of the platform document **v9.3 dated October 19, 2026**; the current version is
+> `docs/KNOWLEDGE.md` (v9.16) in
+> [equality-trust-networks](https://github.com/rumatakira74/equality-trust-networks).
+> The numbers in Section 7.7 here are outdated (the crossing, the peak, the A9 parameters) —
+> the source of truth: the platform document and `reports/REPORT-A9-SIMULATION.md`.
+
 ---
 name: "equality-trust-networks"
 description: "Trust Networks Platform — a constructor of isolated networks without servers or an administrator, running on participants' phones: one person ≈ one wallet (vouching plus hardware attestation), equal periodic issuance, publicly verifiable history; seven application scenarios"
@@ -356,24 +363,24 @@ Relevant for the profiles where units acquire external value (3, 5, 7).
 - **PoW** is reinforced on `register` and on every issuance; light on `transfer`.
 - **The moratorium:** `transfer` from a young wallet becomes available 7–30 days after `register` (a parameter).
 - **Reputation without verdicts:** age, issuance history, and incoming transfers from old wallets are visible in the registry; the recipient decides.
-- **The security metric:** "the farm's cost per wallet" (device + electricity + time + the price of a vouch: social risk, limited slots, 10% of the first year's issuance, the fee on withdrawal) versus "income per wallet". The goal: income < cost under realistic estimates. The calculation is published together with the network parameters. ⚠️ The simulation (Section 7.7) refined the horizon: the farm's break-even price falls and drops below $0.01 by month 38, i.e. the goal is achievable not forever, but for the first ~3 years; check the metric over a horizon ≥ 3 years; do not disable demurrage and the fee in profiles with transferable value.
-- Acknowledged: a guarantee of a human's presence without an external anchor is impossible; the protection is built on the farm's price. The argument "a farm will crash the price" is not considered protection (the commons dilemma).
+- **The security metric:** "the farm's cost per wallet" (device + electricity + time + the price of a vouch: social risk, limited slots, 10% of the first year's issuance, the fee on withdrawal) versus "income per wallet". The goal: income < cost under realistic estimates. The calculation is published together with the network parameters. ⚠️ The simulation (Section 7.7) refined the horizon: the farm's break-even price falls and drops below $0.01 by month 39, i.e. the goal is achievable not forever, but for the first ~3 years; check the metric over a horizon ≥ 3 years; do not disable demurrage and the fee in profiles with transferable value.
+- Acknowledged: a guarantee of a human's presence without an external anchor is impossible; the protection is built on the farm's price. The cost barrier rests on the assumption "one device — one wallet", which the protocol does not verify (a second wallet on the same device cannot be proven, §7.5): the robustness of the conclusion is verified by the wallets_per_device {1, 2, 4} sensitivity in the simulation (§7.7). The argument "a farm will crash the price" is not considered protection (the commons dilemma).
 
 ### 7.7 Farm-economy simulation results ✅
 
-The model: [equality-anti-farm-simulation](https://github.com/rumatakira74/equality-anti-farm-simulation) (Python; averaged over 8 runs, a 60-month horizon). Modeled: the growth of an honest network and of a farm: slots, age thresholds, K, the R reward, the cost of devices, and purchased vouches. Signatures, the network, the registry, PoW, the moratorium, demurrage, and the fee **were not modeled** — the farm economy in the model is overstated rather than understated.
+The model: [equality-anti-farm-simulation](https://github.com/rumatakira74/equality-anti-farm-simulation) (Python; averaged over 8 runs, a 60-month horizon; the canonical runs — the numpy path, a single environment). Modeled: the growth of an honest network and of a farm: slots, age thresholds, K, the R reward, the cost of devices, and purchased vouches. Signatures, the network, the registry, PoW, the moratorium, demurrage, and the fee **were not modeled** — the model is generous to the farm in these respects (the real cost of a wallet is higher than the modeled one). Separately: the assumption "one device = one wallet" is not verified by the protocol (§7.5) — with several wallets on a device, the effective cost of a wallet falls by multiples (wallets_per_device), and the model becomes even more generous to the farm; the robustness of the conclusion is therefore verified by the sensitivity grid device_cost {120, 200} × wallets_per_device {1, 2, 4} (the A9 scenarios).
 
-**The base scenario:** K = 3, slots 3/5/10, a seed circle of 100, a farm of 20 devices/month (a cap of 2000 wallets).
+**The base scenario:** K = 3, slots 3/5/10, a seed circle of 100, a farm of 20 devices/month (a cap of 2000 wallets), device_cost $120 — the canonical value (the decision on the S-01 audit: conservative for the platform's conclusion — even with a cheap device the farm does not break even; $200 — in the sensitivity grid).
 
 1. **The farm does not start without penetration.** If the farm does not buy up vouches from honest members, its ring does not activate a single wallet in 60 months. The farm's mandatory condition is a purchased entry; that is the main cost barrier.
-2. **The farm's share is temporary.** The peak is ~40% in month 27; by month 60 the honest network overtakes the farm (12.1%). A growing honest network is itself a protection; a non-growing network is more vulnerable.
-3. **K = 3 confirmed.** The farm's share at 60 months: K = 2 → 9.6%, K = 3 → 12.1%, K = 4 → 15.2%, K = 5 → 23.2%, while honest growth at K = 5 is 2.2 times slower (3721 versus 8348 `active`).
-4. **Generous slots — confirmed.** Generous slots (5/8/15) give a smaller farm share (11.9%) than narrow ones (2/2/10 — 14.0%) at the same honest-growth speed.
-5. **A seed circle ≥ 300.** The farm's share at 60 months: seed 50 → 21.4%, 100 → 12.1%, 300 → 5.4%, 1000 → 5.4% (the effect saturates after ~300). Recommendation: a seed circle of at least 300 wallets.
-6. **The farm's scale changes the share, not the economics.** A budget of 5 devices/month → a 3.3% farm share, 100 devices/month → 40.5%, yet the break-even price per wallet by month 60 barely changes ($0.005–0.006): scale changes the share, not the cost of a wallet.
-7. ⚠️ **Honest about the payback time.** The farm's break-even price falls monotonically and crosses $0.01 in month 38: at a unit price of $0.01 the base farm is unprofitable for the first ~3 years, then goes into profit. Consequences: demurrage and the burn fee in profiles 5 and 7 are part of the protection, not an option; check the "income < cost" metric over a horizon ≥ 3 years; limit the accumulation horizons (`accrual_window`).
+2. **The farm's share is temporary.** The peak is ~39% in month 28; by month 60 the honest network overtakes the farm (12.0%). A growing honest network is itself a protection; a non-growing network is more vulnerable.
+3. **K = 3 confirmed.** The farm's share at 60 months: K = 2 → 9.4%, K = 3 → 12.0%, K = 4 → 15.1%, K = 5 → 23.5%, while honest growth at K = 5 is 2.3 times slower (3676 versus 8481 `active`).
+4. **Generous slots — confirmed.** Generous slots (5/8/15) give a smaller farm share (11.8%) than narrow ones (2/2/10 — 13.7%) at the same honest-growth speed.
+5. **A seed circle ≥ 300.** The farm's share at 60 months: seed 50 → 22.1%, 100 → 12.0%, 300 → 5.4%, 1000 → 5.4% (the effect saturates after ~300). Recommendation: a seed circle of at least 300 wallets.
+6. **The farm's scale changes the share, not the economics.** A budget of 5 devices/month → a 3.3% farm share, 100 devices/month → 40.4%, yet the break-even price per wallet by month 60 barely changes ($0.005–0.006): scale changes the share, not the cost of a wallet.
+7. ⚠️ **Honest about the payback time.** The farm's break-even price falls monotonically and crosses $0.01 in month 39: at a unit price of $0.01 the base farm is unprofitable for the first ~3 years, then goes into profit. Consequences: demurrage and the burn fee in profiles 5 and 7 are part of the protection, not an option; check the "income < cost" metric over a horizon ≥ 3 years; limit the accumulation horizons (`accrual_window`).
 
-**Assumptions requiring calibration on pilots:** recruit = 0.1 newcomers/person/month; vouch_prob = 0.5 on contact; $200 per device. The numbers are sensitive to these values.
+**Assumptions requiring calibration on pilots:** recruit = 0.1 newcomers/person/month; vouch_prob = 0.5 on contact; $120 per device (the canon; $200 and wallets_per_device {1, 2, 4} — in the sensitivity grid, the `--a9` scenario). The numbers are sensitive to these values.
 
 ---
 
